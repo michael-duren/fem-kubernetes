@@ -1,0 +1,22 @@
+flowchart LR
+    subgraph KIND["Your local cluster"]
+        direction TB
+        L1["Control plane<br/>on your laptop"]:::found
+        L2["Worker nodes<br/>containers on one machine"]:::found
+        L3["Storage / volumes<br/>local-path on filesystem"]:::found
+        L4["Gateway + HTTPRoute<br/>NodePort on a laptop"]:::found
+    end
+    subgraph CLOUD["Your cloud cluster"]
+        direction TB
+        R1["Control plane<br/>managed, highly available"]:::production
+        R2["Worker nodes<br/>isolated machines"]:::production
+        R3["Storage / volumes<br/>networked, highly available"]:::production
+        R4["Gateway + HTTPRoute<br/>load balancer"]:::production
+    end
+    L1 -.-> R1
+    L2 -.-> R2
+    L3 -.-> R3
+    L4 -.-> R4
+
+    classDef found fill:#e6d7ff,stroke:#7a3ff2,color:#23004d
+    classDef production fill:#ffd7b5,stroke:#bc4c00,color:#4d1d00

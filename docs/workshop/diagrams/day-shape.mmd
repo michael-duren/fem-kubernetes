@@ -1,0 +1,21 @@
+flowchart TB
+    subgraph D1["DAY 1"]
+        direction LR
+        A1["Foundations"]:::found
+        A2["Proof-of-Concept"]:::poc
+        A3["Stable"]:::stable
+        A1 --> A2 --> A3
+    end
+    subgraph D2["DAY 2"]
+        direction LR
+        B1["Production"]:::production
+        B2["AWS EKS"]:::eks
+        B1 --> B2
+    end
+    D1 --> D2
+
+    classDef found fill:#ddd,stroke:#666,color:#222
+    classDef poc fill:#e6d7ff,stroke:#7a3ff2,color:#23004d
+    classDef stable fill:#cfe8ff,stroke:#1f6feb,color:#001f4d
+    classDef production fill:#d4f5d4,stroke:#1a7f37,color:#0a3d12
+    classDef eks fill:#ffd7b5,stroke:#bc4c00,color:#4d1d00

@@ -109,8 +109,8 @@ kubectl exec -it sample-app -- sh
 ```
 
 ```
-/app # wget -qO- localhost:8080/healthz
-ok
+/app # curl -s localhost:8080/healthz
+{"status":"ok"}
 /app # exit
 ```
 

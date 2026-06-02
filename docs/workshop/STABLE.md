@@ -398,7 +398,7 @@ git commit -m "Add health probes and resource requests/limits to app"
 
 - **The Pod never reaches `READY 1/1`** after adding probes. The readiness probe path or port is wrong, or the startup probe's `failureThreshold × periodSeconds` is too short for the app's real boot time. Check `kubectl describe pod` for the probe failure message; confirm `/healthz` and port `8080` match what the app actually serves.
 - **`CrashLoopBackOff` after adding limits.** The memory limit is below what the app needs to start, so it is OOM-killed on boot. `kubectl describe pod` shows `OOMKilled` as the last state. Raise the memory limit; the representative values here are illustrative, not tuned for the real image.
-- **The liveness break doesn't restart the Pod.** The toggle did not actually make `/healthz` fail, or the liveness `failureThreshold` has not been reached yet. Confirm `/healthz` returns non-200 (`kubectl exec deploy/sample-app -- wget -qO- localhost:8080/healthz`), then give the probe its interval to trip.
+- **The liveness break doesn't restart the Pod.** The toggle did not actually make `/healthz` fail, or the liveness `failureThreshold` has not been reached yet. Confirm `/healthz` returns non-200 (`kubectl exec deploy/sample-app -- curl -s localhost:8080/healthz`), then give the probe its interval to trip.
 
 ### Transition
 

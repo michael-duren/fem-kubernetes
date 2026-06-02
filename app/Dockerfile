@@ -3,6 +3,10 @@ FROM oven/bun:1.3.10-slim
 
 WORKDIR /app
 
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies first so this layer caches across source edits.
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production

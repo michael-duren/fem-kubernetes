@@ -580,10 +580,10 @@ Gateway API CRDs, then NGF's CRDs, then the controller - it creates its own `ngi
 
 ```bash
 $ kubectl patch nginxproxy nginx-gateway-proxy-config -n nginx-gateway --type=merge \
-    -p '{"spec":{"kubernetes":{"service":{"nodePorts":[{"port":30080,"listenerPort":80}]}}}}'
+    -p '{"spec":{"kubernetes":{"deployment":{"pod":{"nodeSelector":{"node-role.kubernetes.io/control-plane":""},"tolerations":[{"key":"node-role.kubernetes.io/control-plane","operator":"Exists","effect":"NoSchedule"}]}},"service":{"nodePorts":[{"port":30080,"listenerPort":80}]}}}}'
 ```
 
-NGF v2 provisions a data-plane Service per Gateway and auto-allocates its NodePort. Pin it to `30080` so the cluster's host-port-30080 mapping reaches it.
+Pin the NodePort to `30080` and pin the data-plane Pod to the control-plane node - the only node kind maps host 30080 on. One host curl then works on both Docker Desktop and OrbStack.
 
 ---
 
@@ -622,6 +622,8 @@ $ curl -H "Host: sample-app.local" \
     http://localhost:30080/healthz
 ok
 ```
+
+One curl, both runtimes - the data-plane Pod is pinned to the control-plane node, so Docker Desktop and OrbStack both reach localhost:30080.
 
 Same Gateway and HTTPRoute on EKS - a different controller fulfills them.
 

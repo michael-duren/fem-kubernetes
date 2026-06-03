@@ -64,11 +64,13 @@ kubectl apply -k manifests/day-one/k8s/base
 
 `kind-cluster.yaml` maps host port `30080` to node port `30080`. NGINX Gateway Fabric v2.x provisions its nginx data-plane Service dynamically per `Gateway`, and the NodePort deploy variant **auto-allocates** that NodePort to a random high port. Without pinning it to `30080`, the host `30080` -> `30080` mapping points at nothing.
 
-After the NGF controller is up and at/before `Gateway` creation, pin the data-plane NodePort to `30080`:
+The same data-plane Service uses `externalTrafficPolicy: Local`, so a NodePort only answers on a node that actually runs the data-plane Pod — and `kind` maps host `30080` on the **control-plane node only**. So the patch below also pins the data-plane Pod to the control-plane node: the `nodeSelector` targets the built-in `node-role.kubernetes.io/control-plane` label and the matching toleration lets it schedule past the control-plane `NoSchedule` taint. With both pins in place, `curl localhost:30080` works on both Docker Desktop and OrbStack — Docker Desktop forwards a cross-node hop and OrbStack does not, but with the Pod on the control-plane node there is no cross-node hop to forward.
+
+After the NGF controller is up and at/before `Gateway` creation, pin the data-plane NodePort to `30080` and the data-plane Pod to the control-plane node:
 
 ```bash
 kubectl patch nginxproxy nginx-gateway-proxy-config -n nginx-gateway --type=merge \
-  -p '{"spec":{"kubernetes":{"service":{"nodePorts":[{"port":30080,"listenerPort":80}]}}}}'
+  -p '{"spec":{"kubernetes":{"deployment":{"pod":{"nodeSelector":{"node-role.kubernetes.io/control-plane":""},"tolerations":[{"key":"node-role.kubernetes.io/control-plane","operator":"Exists","effect":"NoSchedule"}]}},"service":{"nodePorts":[{"port":30080,"listenerPort":80}]}}}}'
 ```
 
 Keep the `30080` here identical to the `containerPort` in `kind-cluster.yaml`. Then:
@@ -80,14 +82,14 @@ curl -H "Host: sample-app.local" http://localhost:30080/healthz
 ## Fallbacks
 
 - **POC reach** is already port-forward (above) — no host-port mapping needed.
-- **Gateway reach**, if the NodePort pin is unavailable or the host's port `80` is occupied, fall back to a port-forward against the NGF data-plane Service:
+- **Gateway reach** is the combined pin above — `curl localhost:30080` works on both runtimes once the data-plane Pod is on the control-plane node. Only if that pin is skipped, or host port `30080` is occupied, fall back to a port-forward against the NGF data-plane Service:
 
   ```bash
-  kubectl port-forward -n nginx-gateway svc/<dataplane-svc> 8080:80
+  kubectl port-forward -n app svc/sample-app-nginx 8080:80
   curl -H "Host: sample-app.local" http://localhost:8080/healthz
   ```
 
-  (Find the data-plane Service name with `kubectl get svc -n nginx-gateway`.)
+  (The per-`Gateway` data-plane Service is named `<gateway>-nginx` in the `Gateway`'s namespace; find it with `kubectl get svc -A | grep nginx`.)
 - **Host-port collision:** `kind-cluster.yaml` pins host port `30080`. If something already listens on `:30080`, the Gateway port-forward fallback above sidesteps it.
 
 ## Operator notes
@@ -95,4 +97,4 @@ curl -H "Host: sample-app.local" http://localhost:30080/healthz
 - Pinned tool versions (from the TDD canonical table): CloudNativePG **v1.29.1**, NGINX Gateway Fabric **v2.6.3** (Gateway API v1.5.1), kind node image `kindest/node:v1.35.0`.
 - The CloudNativePG `Cluster` uses `storageClass: standard` (kind's built-in local-path provisioner).
 - The `256Mi` memory limit in `k8s/base/deployment.yaml` is a starting point for a trivial Bun server; confirm it does not `OOMKilled` on the clean-machine pass and bump if `kubectl describe pod` shows it.
-- The data-plane NodePort `30080` is the single most environment-sensitive value — confirm reachability on a real cluster (the clean-machine pass is the gate).
+- The data-plane NodePort `30080` is the single most environment-sensitive value — confirm reachability on a real cluster (the clean-machine pass is the gate). Pinning the data-plane Pod to the control-plane node (in the same patch) resolves the OrbStack cross-node case, so the one host curl works on both Docker Desktop and OrbStack.

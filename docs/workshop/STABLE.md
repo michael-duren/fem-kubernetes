@@ -664,10 +664,11 @@ kubectl wait --namespace nginx-gateway \
 deployment.apps/nginx-gateway condition met
 ```
 
-Pin the data plane to the mapped node port. NGF v2 provisions a data-plane Service per `Gateway` and auto-allocates its NodePort, so patch the `nginxproxy` config to pin that NodePort to `30080` — the port `kind`'s host-port mapping forwards from `localhost`. Without this, the auto-allocated port will not match the cluster's `extraPortMappings` and `curl` to `localhost:30080` will not reach the controller.
+Pin the data plane to the mapped node port **and** to the control-plane node. NGF v2 provisions a data-plane Service per `Gateway` and auto-allocates its NodePort, so patch the `nginxproxy` config to pin that NodePort to `30080` — the port `kind`'s host-port mapping forwards from `localhost`. The same patch also pins the data-plane Pod to the control-plane node: the data-plane Service uses `externalTrafficPolicy: Local`, so a NodePort only answers on a node that actually runs the data-plane Pod, and `kind` maps host `30080` on the control-plane node only. The `nodeSelector` targets the built-in `node-role.kubernetes.io/control-plane` label and the matching toleration lets the Pod schedule past the control-plane `NoSchedule` taint. With both in place, the single `curl http://localhost:30080` works on both Docker Desktop and OrbStack — no port-forward and no per-runtime split.
 
 ```bash
-kubectl patch nginxproxy nginx-gateway-proxy-config -n nginx-gateway --type=merge -p '{"spec":{"kubernetes":{"service":{"nodePorts":[{"port":30080,"listenerPort":80}]}}}}'
+kubectl patch nginxproxy nginx-gateway-proxy-config -n nginx-gateway --type=merge \
+  -p '{"spec":{"kubernetes":{"deployment":{"pod":{"nodeSelector":{"node-role.kubernetes.io/control-plane":""},"tolerations":[{"key":"node-role.kubernetes.io/control-plane","operator":"Exists","effect":"NoSchedule"}]}},"service":{"nodePorts":[{"port":30080,"listenerPort":80}]}}}}'
 ```
 
 ```text
@@ -787,7 +788,7 @@ NAME         CLASS   ADDRESS     PROGRAMMED   AGE
 sample-app   nginx   localhost   True         20s
 ```
 
-Reach the app through the `Gateway` instead of a node port. NGF's NodePort data plane is reached through `kind`'s host port-mapping, so requests to `localhost` route through the controller to the app's Service — the `HTTPRoute`'s `sample-app.local` host rule still selects the route, sent as a `Host` header.
+Reach the app through the `Gateway` instead of a node port. NGF's NodePort data plane is reached through `kind`'s host port-mapping, so requests to `localhost` route through the controller to the app's Service — the `HTTPRoute`'s `sample-app.local` host rule still selects the route, sent as a `Host` header. Because the patch above pins the data-plane Pod to the control-plane node whose host port is mapped, this single command works the same on both Docker Desktop and OrbStack.
 
 ```bash
 curl -H "Host: sample-app.local" http://localhost:30080/healthz
@@ -815,6 +816,7 @@ git commit -m "Replace NodePort with NGINX Gateway Fabric, a Gateway, and an HTT
 - **`gatewayClassName` mismatch.** If the `Gateway` never gets an address, its `gatewayClassName` may not match an installed `GatewayClass`. `kubectl get gatewayclass` shows what is installed (`nginx` for NGF); the `Gateway`'s `gatewayClassName` must match one of them.
 - **`404` or connection refused through the `Gateway`.** Either the `Host` header does not match the `HTTPRoute` `hostnames` rule, or the backend Service name/port is wrong. Send the exact `Host` the rule expects and check `kubectl get endpoints sample-app -n app` lists the app Pod.
 - **NGF NodePort not reachable on `kind`.** If the controller is `PROGRAMMED` but `curl` to `localhost` still refuses, the node port the NGF data plane listens on may not be one `kind`'s `extraPortMappings` forwards from host :80. This is the cross-environment wiring the NodePort manifest depends on; verify the `kind` cluster config maps the host port to the NodePort the manifest uses, and adjust the cluster config if needed.
+- **`localhost:30080` still refuses even when the `Gateway` is `PROGRAMMED`.** The control-plane pin in the patch above resolves the OrbStack cross-node case, so first verify the data-plane Pod actually landed on the control-plane node: `kubectl get pods -n app -o wide | grep nginx` should show it on `kind-control-plane`. If it is on a worker, the `nodeSelector`/toleration in the `nginxproxy` patch did not apply — re-apply the patch and let the data-plane Pod reschedule. Last-resort fallback (e.g. if you skipped the pin): port-forward the per-`Gateway` data-plane Service (named `<gateway>-nginx` in the `Gateway`'s namespace; find it with `kubectl get svc -A | grep nginx`): `kubectl port-forward -n app svc/sample-app-nginx 8080:80`, then `curl -H "Host: sample-app.local" localhost:8080/healthz`.
 - **The published manifest refs change.** Pinning to a moving ref can drift; if any of the three apply steps fails, fall back to the exact NGF release tag you pinned in pre-flight from its releases page rather than debugging a moving target on stage.
 
 ### Transition

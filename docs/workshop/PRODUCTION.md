@@ -812,7 +812,7 @@ Give EKS durable storage the way `kind` had local-path. The `kind` local-path pr
 
 ### Talking points
 
-- **The PVC is the contract; the provisioner is environmental.** A PersistentVolumeClaim is a stable request — "I need 10Gi of durable storage." On `kind` the local-path provisioner satisfied it; on EKS the EBS CSI driver does, carving a real EBS volume. The CNPG `Cluster` manifest that asks for storage does not change at all — only what fulfills the request does. This is the same contract-vs-controller lesson Day 1 previewed.
+- **The PVC is the contract; the provisioner is environmental.** A PersistentVolumeClaim is a stable request — "I need 1Gi of durable storage." On `kind` the local-path provisioner satisfied it; on EKS the EBS CSI driver does, carving a real EBS volume. The CNPG `Cluster` manifest that asks for storage does not change at all — only what fulfills the request does. This is the same contract-vs-controller lesson Day 1 previewed.
 - **The EBS CSI driver is how Kubernetes talks to AWS block storage.** CSI (Container Storage Interface) is the standard plug-in point for storage; the EBS CSI driver is the AWS implementation. It runs as an add-on and provisions EBS volumes on demand when a PVC asks for them through its StorageClass.
 - **gp3 over the default gp2.** EKS ships a `gp2` StorageClass; gp3 is the newer general-purpose volume type with better baseline performance and decoupled IOPS. We create a `gp3` StorageClass and make it the default so new PVCs land on gp3 — a small, real-world "use the better default" choice.
 - **`WaitForFirstConsumer` binds the volume where the Pod lands.** The StorageClass uses late binding so the EBS volume is created in the same availability zone as the Pod that will use it — EBS volumes are zonal, and binding early in the wrong zone is a classic cloud-storage footgun.
@@ -885,7 +885,7 @@ kubectl get pvc -n app
 
 ```text
 NAME         STATUS   VOLUME       CAPACITY   ACCESS MODES   STORAGECLASS   AGE
-postgres-1   Bound    pvc-a1b2c3   10Gi       RWO            gp3            45s
+postgres-1   Bound    pvc-a1b2c3   1Gi        RWO            gp3            45s
 ```
 
 The same Postgres manifest that ran on local-path now runs on durable EBS — proof in the AWS console, where a real gp3 volume now exists:
@@ -898,7 +898,7 @@ aws ec2 describe-volumes --region us-west-2 \
 
 ```text
 [
-  { "ID": "vol-0abc123def456", "Type": "gp3", "Size": 10 }
+  { "ID": "vol-0abc123def456", "Type": "gp3", "Size": 1 }
 ]
 ```
 
@@ -934,7 +934,26 @@ Give EKS a front door the cloud way. On `kind` the `Gateway` and `HTTPRoute` wer
 
 ### Live build
 
-The controller needs IAM permissions to manage load balancers. Associate the cluster's OIDC provider and create the IAM service account `eksctl` manages for it:
+The controller needs IAM permissions to manage load balancers. Those permissions live in a managed IAM policy, `AWSLoadBalancerControllerIAMPolicy`, that the service account below attaches by ARN — so it has to exist first. It is an account-level policy, not created by `eksctl create cluster`, so create it once from the upstream document pinned to the LBC version you are installing (v3.3.0):
+
+```bash
+curl -o iam_policy.json \
+  https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v3.3.0/docs/install/iam_policy.json
+aws iam create-policy --policy-name AWSLoadBalancerControllerIAMPolicy \
+  --policy-document file://iam_policy.json
+```
+
+```text
+{
+    "Policy": {
+        "PolicyName": "AWSLoadBalancerControllerIAMPolicy",
+        "Arn": "arn:aws:iam::<your-aws-account>:policy/AWSLoadBalancerControllerIAMPolicy",
+        ...
+    }
+}
+```
+
+With the policy in place, associate the cluster's OIDC provider and create the IAM service account `eksctl` manages, attaching that policy by its ARN:
 
 ```bash
 eksctl utils associate-iam-oidc-provider --cluster fem-workshop \
@@ -950,13 +969,20 @@ eksctl create iamserviceaccount --cluster fem-workshop --region us-west-2 \
 2026-06-03 14:06:55 [ℹ]  created serviceaccount "kube-system/aws-load-balancer-controller"
 ```
 
-The v3 Gateway API path has two prerequisites the old v2 Ingress path did not. The controller's manifest webhooks are TLS-served, so it depends on cert-manager; and the Gateway API → ALB feature ships its own CRDs that must be present before the controller starts. Both install via `kubectl apply` — no Helm. Install cert-manager first, then the LBC Gateway API CRDs:
+The v3 Gateway API path has three prerequisites the old v2 Ingress path did not, and they install in two different API groups — get this straight or the `Gateway` apply later in the segment fails with `no matches for kind "Gateway"`. The controller's manifest webhooks are TLS-served, so it depends on cert-manager. It also needs **two distinct sets of CRDs**:
+
+- The **standard-channel Gateway API CRDs** (`gateway.networking.k8s.io`: `GatewayClass`, `Gateway`, `HTTPRoute`) — the upstream Kubernetes API the route contract is written against. These ship from the `kubernetes-sigs/gateway-api` project, **not** from the LBC, and a bare EKS cluster does not have them. `kind`'s NGINX Gateway Fabric install brought them along this morning; on EKS you install them yourself.
+- The **LBC's own ALB-config CRDs** (`gateway.k8s.aws`: `LoadBalancerConfiguration`, `TargetGroupConfiguration`, `ListenerRuleConfiguration`) — the type-safe knobs the `GatewayClass` references. These ship in the LBC's `gateway-crds.yaml` and exist only because of the controller.
+
+All install via `kubectl apply` — no Helm. Install cert-manager, then the standard Gateway API CRDs, then the LBC ALB-config CRDs:
 
 ```bash
 kubectl apply --validate=false -f \
   https://github.com/cert-manager/cert-manager/releases/download/vX.Y.Z/cert-manager.yaml
 kubectl wait --namespace cert-manager \
   --for=condition=Available deployment --all --timeout=120s
+kubectl apply --server-side -f \
+  https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/standard-install.yaml
 kubectl apply -f \
   https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/vX.Y.Z/config/crd/gateway/gateway-crds.yaml
 ```
@@ -966,10 +992,16 @@ namespace/cert-manager created
 deployment.apps/cert-manager created
 deployment.apps/cert-manager-webhook created
 ...
+customresourcedefinition.apiextensions.k8s.io/gatewayclasses.gateway.networking.k8s.io serverside-applied
+customresourcedefinition.apiextensions.k8s.io/gateways.gateway.networking.k8s.io serverside-applied
+customresourcedefinition.apiextensions.k8s.io/httproutes.gateway.networking.k8s.io serverside-applied
+...
 customresourcedefinition.apiextensions.k8s.io/loadbalancerconfigurations.gateway.k8s.aws created
 customresourcedefinition.apiextensions.k8s.io/targetgroupconfigurations.gateway.k8s.aws created
 ...
 ```
+
+The standard-channel CRDs are pinned to **v1.5.0** — the release the AWS Load Balancer Controller v3.3.0 documents — and applied `--server-side` because the upstream bundle's annotations exceed the client-side apply size limit.
 
 Now install the controller from its upstream manifest, pointed at the cluster name:
 
@@ -1080,17 +1112,17 @@ kubectl get gateway sample-app -n app
 
 ```text
 NAME         CLASS   ADDRESS                                                       PROGRAMMED   AGE
-sample-app   alb     k8s-sampleapp-xxxx-1234567890.us-west-2.elb.amazonaws.com      True         90s
+sample-app   alb     k8s-app-sampleap-a1b2c3d4e5-1234567890.us-west-2.elb.amazonaws.com   True         90s
 ```
 
 Hit the app through the ALB's public DNS name — traffic now enters through real AWS infrastructure, not a port-forward:
 
 ```bash
-curl http://k8s-sampleapp-xxxx-1234567890.us-west-2.elb.amazonaws.com/healthz
+curl http://k8s-app-sampleap-a1b2c3d4e5-1234567890.us-west-2.elb.amazonaws.com/healthz
 ```
 
 ```text
-ok
+{"status":"ok"}
 ```
 
 The identical `Gateway` and `HTTPRoute` that ran behind NGINX Gateway Fabric on `kind` now front a production ALB on EKS. Contract unchanged; controller environmental — named explicitly by the `GatewayClass`.
@@ -1231,11 +1263,11 @@ kubectl config current-context
 <your-aws-account>@fem-workshop.us-west-2.eksctl.io
 ```
 
-**Step 1 — Install the Sealed Secrets controller on EKS** — its own controller, its own key:
+**Step 1 — Install the Sealed Secrets controller on EKS** — its own controller, its own key. Pin the controller to the same version as the `kubeseal` CLI you sealed with (v0.34.0); a `latest` controller could outrun the pinned CLI and skew the seal/unseal pair:
 
 ```bash
 kubectl apply -f \
-  https://github.com/bitnami-labs/sealed-secrets/releases/latest/download/controller.yaml
+  https://github.com/bitnami-labs/sealed-secrets/releases/download/v0.34.0/controller.yaml
 ```
 
 ```text
@@ -1420,22 +1452,67 @@ You can now watch the cluster without standing up a metrics stack. One responsib
 
 ### Goal
 
-Tear the EKS cluster down completely — and verify nothing was left behind to keep billing. Every student runs `eksctl delete cluster`, then checks the AWS console that no EBS volumes and no load balancers were orphaned. This is load-bearing, not housekeeping: a cluster you forget about is a bill you did not budget for, and orphaned EBS volumes and load balancers keep charging long after the cluster is gone. The framing is operational discipline — cleanup is part of the job, not an afterthought.
+Tear the EKS cluster down completely — and verify nothing was left behind to keep billing. The order is the lesson: stop GitOps reconciliation and let the AWS Load Balancer Controller deprovision the ALB *before* `eksctl delete cluster`, then verify no EBS volumes and no load balancers were orphaned. This is load-bearing, not housekeeping: a cluster you forget about is a bill you did not budget for, and orphaned EBS volumes and load balancers keep charging long after the cluster is gone. The framing is operational discipline — cleanup is part of the job, not an afterthought.
 
 ### Talking points
 
 - **Cleanup is operational discipline, not optional tidying.** An EKS control plane, its nodes, its EBS volumes, and its ALB all bill by the hour, independently. Deleting "the cluster" is necessary but not automatically sufficient — resources created *by* workloads (the gp3 volumes from segment 25, the ALB from segment 26) can outlive a careless delete. The discipline is: delete, then **verify**.
 - **`eksctl delete cluster` tears down what `eksctl` created.** Because the cluster was created from the `eksctl` config, deleting it removes the control plane, node groups, and the CloudFormation stacks `eksctl` owns. It runs for several minutes; you start it and narrate the verification while it works.
-- **Orphans come from resources `eksctl` did not create.** The ALB was created by the AWS Load Balancer Controller — which reconciles the `Gateway` into the ALB and attaches its security groups — and the EBS volumes by the EBS CSI driver, not directly by `eksctl`. The `Gateway` owns the ALB's lifecycle (the `HTTPRoute` is just routing rules layered on top), so if the `Gateway` and the PVCs are not cleaned up before (or as part of) the delete, those AWS resources can be left behind and keep charging. That is exactly what the post-delete check looks for.
+- **Orphans come from resources `eksctl` did not create — and from controllers that fight the delete.** The ALB was created by the AWS Load Balancer Controller — which reconciles the `Gateway` into the ALB and attaches its security groups — and the EBS volumes by the EBS CSI driver, not directly by `eksctl`. Two things actively work against a naive `eksctl delete cluster`: Argo CD's `selfHeal: true` re-creates the `Gateway` from git if you delete it while the `Application` still reconciles, and the live controller keeps an ALB provisioned for any `Gateway` that exists. The ALB's ENIs and the security groups the controller attaches then block VPC/subnet deletion and wedge the stack. That is why the ordering is stop reconciliation → stop the controller (after it deprovisions the ALB) → delete the cluster, and why the verification check filters by cluster tag, not by name.
 - **"A forgotten cluster is an unbudgeted bill."** Say it plainly. The single most common cloud-workshop regret is a student whose cluster ran for a week after the workshop ended. The verification step is how you guarantee that does not happen to anyone in the room.
 - **Deleting the cluster also destroys the Sealed Secrets controller's private key — fine here, not fine in production.** The controller's key lives in the cluster and is per-cluster, so `eksctl delete cluster` takes it with everything else. That is acceptable here only because the cluster is disposable and each cluster re-seals its own copy from the plaintext. In a real environment you would **back up the controller's private key before deleting** — lose it and every existing `SealedSecret` sealed against it becomes permanently undecryptable, even from a clean restore of the git repo.
 
 ### Live build
 
-Start the deletion. It runs for several minutes in the background while you walk the orphaned-resource check — do not wait silently on it:
+Order matters here, and it is a teaching point — not a magic incantation. Two things on this cluster will fight a naive teardown: Argo CD has `selfHeal: true`, so deleting the `Gateway` while the `Application` is still reconciling just re-creates it from git; and the AWS Load Balancer Controller is still running, so any live `Gateway` keeps a real ALB provisioned. If you go straight to `eksctl delete cluster`, that ALB's ENIs and the security groups the controller attached stay in the VPC and **block** the VPC/subnet deletion — the stack wedges and you clean it up by hand. So tear down in the order that lets the controller deprovision the ALB cleanly while it is still alive.
+
+First, stop GitOps reconciliation so nothing is re-created behind you. Delete the Argo CD `Application` (setting `selfHeal: false` works too, but deleting it is unambiguous on stage):
 
 ```bash
-eksctl delete cluster -f eks-cluster.yaml --region us-west-2
+kubectl delete application sample-app -n argocd
+```
+
+```text
+application.argoproj.io/sample-app deleted
+```
+
+Next, delete the `Gateway` and let the still-running controller deprovision its ALB. The controller must stay alive for this — it is what tears the ALB down — so do **not** scale it yet:
+
+```bash
+kubectl delete gateway sample-app -n app
+```
+
+```text
+gateway.gateway.networking.k8s.io "sample-app" deleted
+```
+
+Confirm the ALB is actually deprovisioned before going further — this is the check that prevents a wedged VPC. Filter by the cluster tag the controller stamps on every load balancer it creates, not by name; an empty result means the controller finished deprovisioning:
+
+```bash
+aws elbv2 describe-load-balancers --region us-west-2 \
+  --query "LoadBalancers[].LoadBalancerArn" --output json \
+  | xargs -I{} aws elbv2 describe-tags --resource-arns {} --region us-west-2 \
+    --query "TagDescriptions[?Tags[?Key=='elbv2.k8s.aws/cluster' && Value=='fem-workshop']].ResourceArn"
+```
+
+```text
+[]
+```
+
+With the ALB gone, scale the controller to zero so nothing can re-provision a load balancer during the cluster delete:
+
+```bash
+kubectl scale deployment aws-load-balancer-controller -n kube-system --replicas=0
+```
+
+```text
+deployment.apps/aws-load-balancer-controller scaled
+```
+
+Now start the cluster deletion. It runs for several minutes in the background while you walk the rest of the orphaned-resource check — do not wait silently on it. The region comes from the config, so pass only `-f` (eksctl rejects `--region` together with `-f`):
+
+```bash
+eksctl delete cluster -f eks-cluster.yaml
 ```
 
 ```text
@@ -1444,11 +1521,13 @@ eksctl delete cluster -f eks-cluster.yaml --region us-west-2
 2026-06-03 15:51:06 [ℹ]  waiting for CloudFormation stack to be deleted ...
 ```
 
-While that runs, check for orphaned load balancers — there should be none once the controller cleaned up the ALB from the deleted `Gateway`. An empty result is the goal:
+While that runs, re-check for any orphaned load balancer the cluster delete left behind — there should be none, since the controller deprovisioned the ALB before you scaled it to zero. Filter by the same cluster tag, not by name; the LBC's real ALB name is `k8s-app-sampleap-<hash>` (namespace segment plus a truncated app name), so a `k8s-sampleapp` name match silently returns empty even when an ALB is orphaned. Tag-matching is what makes this check trustworthy:
 
 ```bash
 aws elbv2 describe-load-balancers --region us-west-2 \
-  --query 'LoadBalancers[?contains(LoadBalancerName, `k8s-sampleapp`)].LoadBalancerArn'
+  --query "LoadBalancers[].LoadBalancerArn" --output json \
+  | xargs -I{} aws elbv2 describe-tags --resource-arns {} --region us-west-2 \
+    --query "TagDescriptions[?Tags[?Key=='elbv2.k8s.aws/cluster' && Value=='fem-workshop']].ResourceArn"
 ```
 
 ```text
@@ -1474,6 +1553,17 @@ aws ec2 delete-volume --region us-west-2 --volume-id <volume-id>
 aws elbv2 delete-load-balancer --region us-west-2 --load-balancer-arn <load-balancer-arn>
 ```
 
+If `eksctl delete cluster` itself wedges on a stuck VPC or subnet, the usual culprit is a security group the controller created and `eksctl delete cluster` does **not** remove — `k8s-app-sampleap-*` (the ALB's group) and `k8s-traffic-*` (the shared backend group). List and delete them by the same cluster tag, then re-run the cluster delete:
+
+```bash
+aws ec2 describe-security-groups --region us-west-2 \
+  --filters Name=tag:elbv2.k8s.aws/cluster,Values=fem-workshop \
+  --query 'SecurityGroups[].GroupId'
+aws ec2 delete-security-group --region us-west-2 --group-id <security-group-id>
+```
+
+The `AWSLoadBalancerControllerIAMPolicy` created in segment 26 is account-level and is **not** removed by `eksctl delete cluster`. An unused IAM policy does not bill, so it is harmless to leave; delete it (`aws iam delete-policy --policy-arn arn:aws:iam::<your-aws-account>:policy/AWSLoadBalancerControllerIAMPolicy`) only if you want a clean account and are not standing the cluster back up.
+
 Confirm the cluster itself is gone once the delete finishes — `eksctl` lists no cluster, and the context can be removed:
 
 ```bash
@@ -1488,9 +1578,9 @@ The cluster is down, no volumes or load balancers were left behind, and nothing 
 
 ### Watch for
 
-- **`eksctl delete cluster` errors with a stuck CloudFormation stack** — usually a leftover resource (an ALB or a security group still in use) blocks stack deletion. The orphaned-resource checks above find it; delete the blocker explicitly, then re-run the cluster delete. This is precisely why the verification step exists.
-- **The ALB is orphaned because the `Gateway` was not deleted first** — deleting the cluster does not always clean up the controller-created ALB if the controller is torn down before it processes the `Gateway` removal. The `Gateway` owns the ALB, so it is the resource to remove first. If the load-balancer check is non-empty, delete the ALB explicitly with the recovery command above. Mention deleting the `Gateway` before the cluster as the clean path.
-- **A student is on the wrong context and "nothing deletes"** — `eksctl delete cluster -f eks-cluster.yaml` operates on the config's cluster regardless of `kubectl` context, but confirm the `--region` matches where the cluster actually runs. A region mismatch is why a delete "succeeds" but the bill continues.
+- **`eksctl delete cluster` wedges on a stuck CloudFormation stack** — almost always the ALB's ENIs or the controller-created security groups (`k8s-app-sampleap-*`, `k8s-traffic-*`) still in the VPC, blocking subnet/VPC deletion. This is the failure the ordering above is designed to avoid: if you skipped the deprovision steps and hit it anyway, delete the orphaned ALB and those security groups by cluster tag (the recovery commands above), then re-run the cluster delete. This is precisely why the pre-delete deprovision and the verification step exist.
+- **The ALB comes back right after you delete the `Gateway`** — Argo CD `selfHeal` re-applied the `Gateway` from git, or the still-running controller re-provisioned the ALB. That is why you delete the `Application` (or set `selfHeal: false`) *before* the `Gateway`, and confirm the ALB is deprovisioned before scaling the controller down. If it reappears, check that the `Application` is actually gone (`kubectl get application -n argocd`) before retrying.
+- **A student is on the wrong context and "nothing deletes"** — `eksctl delete cluster -f eks-cluster.yaml` reads the cluster name and region from the config file regardless of `kubectl` context, so a stale context does not break the delete; but confirm the config points at the cluster that is actually running. The pre-delete `kubectl` steps (deleting the `Application` and `Gateway`), by contrast, *do* act on the current context — make sure `kubectl` is pointed at the EKS cluster, not a leftover `kind` context, before running them.
 
 ### Transition
 

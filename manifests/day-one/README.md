@@ -95,6 +95,6 @@ curl -H "Host: sample-app.local" http://localhost:30080/healthz
 ## Operator notes
 
 - Pinned tool versions (from the TDD canonical table): CloudNativePG **v1.29.1**, NGINX Gateway Fabric **v2.6.3** (Gateway API v1.5.1), kind node image `kindest/node:v1.35.0`.
-- The CloudNativePG `Cluster` uses `storageClass: standard` (kind's built-in local-path provisioner).
+- The CloudNativePG `Cluster` pins no `storageClass`, so its PVC falls through to the cluster default — `standard` (kind's built-in local-path provisioner) on kind, `gp3` on EKS.
 - The `256Mi` memory limit in `k8s/base/deployment.yaml` is a starting point for a trivial Bun server; confirm it does not `OOMKilled` on the clean-machine pass and bump if `kubectl describe pod` shows it.
 - The data-plane NodePort `30080` is the single most environment-sensitive value — confirm reachability on a real cluster (the clean-machine pass is the gate). Pinning the data-plane Pod to the control-plane node (in the same patch) resolves the OrbStack cross-node case, so the one host curl works on both Docker Desktop and OrbStack.

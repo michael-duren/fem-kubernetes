@@ -9,3 +9,5 @@ patches:
     target: { kind: Cluster, name: postgres }
   - path: replicas-4.yaml
     target: { kind: Deployment, name: sample-app }
+  - path: httproute-path-only.yaml
+    target: { kind: HTTPRoute, name: sample-app }

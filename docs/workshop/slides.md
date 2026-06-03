@@ -769,10 +769,6 @@ $ kubectl apply -k manifests/day-one/k8s/base
 
 ---
 
-# Wrap-up
-
----
-
 ## Half of the climb
 
 ![h:430 Two-day day-shape with Day 1 highlighted: Foundations, POC, then Stable on kind - Day 2's Production and EKS capstone still ahead](img/diagrams/day-shape.svg)
@@ -787,7 +783,7 @@ Imperative POC to declarative Stable - all on one `kind` cluster.
 
 ---
 
-## The shape, before we close
+## The shape, before we move on
 
 ![h:430 Two-day day-shape: Foundations, POC, and Stable behind us on Day 1; Production hardening and the EKS capstone ahead on Day 2](img/diagrams/day-shape.svg)
 
@@ -798,10 +794,6 @@ Imperative POC to declarative Stable - all on one `kind` cluster.
 - Your `kind` cluster is the left-hand, edge end of that picture
 - Right-hand column is the journey to the managed cloud build
 - Production hardens it; the EKS cluster runs it for real
-
----
-
-# Kickoff
 
 ---
 
@@ -1569,8 +1561,16 @@ One app rode from a bare Pod to autoscaled GitOps on a real cloud cluster.
 
 ---
 
-## ...go run your own clusters on Monday
+## Thanks for watching
 
-![w:440 A closing recap beat - two days done, the full maturity arc behind you](https://media.giphy.com/media/3ornk57KwDXf81rjWM/giphy.gif)
+---
 
-Same bricks, three builds - now you know which posture fits which context.
+## I build things on the internet
+
+- Blog: https://altf4.blog
+- Github (company): https://github.com/ALT-F4-LLC
+- Github (personal): https://github.com/erikreinert
+- Twitch: https://www.twitch.tv/thealtf4stream
+- Twitter: https://www.x.com/thealtf4stream
+- YouTube: https://www.youtube.com/thealtf4stream
+- Vorpal: https://docs.vorpal.build

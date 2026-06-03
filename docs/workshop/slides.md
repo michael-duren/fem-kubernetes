@@ -687,7 +687,6 @@ spec:
   instances: 1
   storage:
     size: 1Gi
-    storageClass: standard
   bootstrap:
     initdb:
       database: appdb
@@ -1190,7 +1189,7 @@ gp2    kubernetes.io/aws-ebs   Delete          WaitForFirstConsumer
 
 ## The PVC is the contract; the provisioner is environmental
 
-- A PVC is a stable request - "10Gi of durable storage"
+- A PVC is a stable request - "1Gi of durable storage"
 - `kind` answered it with local-path; EKS answers with EBS CSI
 - gp3 over the default gp2 - better baseline, decoupled IOPS
 - `WaitForFirstConsumer`: bind the zonal volume where the Pod lands
@@ -1223,7 +1222,7 @@ storageclass.storage.k8s.io/gp3 created
 ```bash
 $ kubectl get pvc -n app
 NAME         STATUS   VOLUME      CAPACITY   STORAGECLASS
-postgres-1   Bound    pvc-a1b2c3  10Gi       gp3
+postgres-1   Bound    pvc-a1b2c3  1Gi        gp3
 
 $ aws ec2 describe-volumes --region us-west-2 \
     --filters Name=tag:...pvc/name,Values=postgres-1 \
@@ -1251,13 +1250,18 @@ Same Postgres manifest - manifest portable, storage class environmental.
 ## Install: IAM, then cert-manager + CRDs + controller
 
 ```bash
+$ aws iam create-policy --policy-name AWSLoadBalancerControllerIAMPolicy \
+    --policy-document file://iam_policy.json   # account-level, create once
 $ eksctl create iamserviceaccount --cluster fem-workshop \
-    --namespace kube-system \
-    --name aws-load-balancer-controller --approve
+    --namespace kube-system --name aws-load-balancer-controller \
+    --attach-policy-arn arn:aws:iam::<acct>:policy/AWSLoadBalancerControllerIAMPolicy \
+    --approve
 ... created serviceaccount
 
 $ kubectl apply --validate=false -f .../cert-manager.yaml
-$ kubectl apply -f .../gateway-crds.yaml
+$ kubectl apply --server-side -f \
+    .../gateway-api/releases/download/v1.5.0/standard-install.yaml  # gateway.networking.k8s.io
+$ kubectl apply -f .../gateway-crds.yaml                            # gateway.k8s.aws (LBC)
 $ kubectl apply -f .../v3_X_Y_full.yaml   # pin v3.0.0+
 deployment.apps/aws-load-balancer-controller created
 ```
@@ -1296,10 +1300,10 @@ gateway.../sample-app created
 
 $ kubectl get gateway sample-app -n app
 NAME         CLASS   ADDRESS                       PROGRAMMED
-sample-app   alb     k8s-sampleapp-xxxx...elb...    True
+sample-app   alb     k8s-app-sampleap-<hash>...elb...    True
 
-$ curl http://k8s-sampleapp-xxxx...elb.amazonaws.com/healthz
-ok
+$ curl http://k8s-app-sampleap-<hash>...elb.amazonaws.com/healthz
+{"status":"ok"}
 ```
 
 Only `gatewayClassName` changed - contract unchanged, controller environmental.
@@ -1459,18 +1463,35 @@ We stop here on purpose: a Prometheus/Grafana/Loki stack is its own thing to run
 - Control plane, nodes, EBS volumes, ALB - each bills by the hour
 - `eksctl delete cluster` removes what `eksctl` created
 - Orphans come from what it *didn't* create - the ALB and the EBS volumes
-- The rule is two steps: delete, then **verify**
+- Order matters: stop GitOps + let the live LBC deprovision the ALB *before* the delete
+- Skip the order and Argo CD `selfHeal` + the controller re-create the ALB - its ENIs/SGs wedge the VPC delete
+- The rule is two steps: delete in order, then **verify**
 
 ---
 
-## Delete, then check for orphans
+## Stop reconciliation, deprovision the ALB, then delete
 
 ```bash
-$ eksctl delete cluster -f eks-cluster.yaml --region us-west-2
+$ kubectl delete application sample-app -n argocd   # stop selfHeal first
+$ kubectl delete gateway sample-app -n app          # live LBC tears down the ALB
+$ kubectl scale deployment aws-load-balancer-controller \
+    -n kube-system --replicas=0                      # only after the ALB is gone
+$ eksctl delete cluster -f eks-cluster.yaml          # region comes from the config
 ... deleting EKS cluster "fem-workshop"
+```
 
+Order is the lesson: skip it and `selfHeal` + the controller re-create the ALB.
+
+---
+
+## Then check for orphans - by cluster tag, not name
+
+```bash
 $ aws elbv2 describe-load-balancers --region us-west-2 \
-    --query 'LoadBalancers[?contains(...,`k8s-sampleapp`)]'
+    --query "LoadBalancers[].LoadBalancerArn" --output json \
+  | xargs -I{} aws elbv2 describe-tags --resource-arns {} --region us-west-2 \
+    --query "TagDescriptions[?Tags[?Key=='elbv2.k8s.aws/cluster' \
+             && Value=='fem-workshop']].ResourceArn"
 []
 
 $ aws ec2 describe-volumes --region us-west-2 \
@@ -1479,7 +1500,7 @@ $ aws ec2 describe-volumes --region us-west-2 \
 []
 ```
 
-Two empty lists - the clean case, and the one to make students see.
+Tag-match, not `k8s-sampleapp`: the real name is `k8s-app-sampleap-<hash>`.
 
 ---
 

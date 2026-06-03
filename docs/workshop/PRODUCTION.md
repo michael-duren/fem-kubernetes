@@ -1,6 +1,8 @@
 # Production — Instructor Guide
 
-This is the **Production** stage of the workshop — OUTLINE segments 17-21 (Day-2 morning, 9:45-12:00) and 23-31 (Day-2 afternoon, 12:45-4:15), authored as one continuous stage. It is the longest stage and the workshop's capstone. By the end, the same app that started as a bare Pod autoscales on demand, rolls out safely and rolls back on failure, survives a node drain, runs under a least-privilege ServiceAccount, keeps its secrets git-safe with Sealed Secrets, is reconciled from git by Argo CD, and has been **migrated from the local `kind` cluster onto a real Amazon EKS cluster** via a Kustomize overlay over the same base — the state you would hand to an on-call rotation. The morning hardens the app on `kind`; the afternoon stands it up in the cloud. Segment 22 between the two bands is the lunch interlude and has no entry here.
+This is the **Production** stage of the workshop — OUTLINE segments 17-21 (Day-2 morning, 9:45-12:00) and 23-31 (Day-2 afternoon, 12:45-4:15), authored as one continuous stage. It is the longest stage and the workshop's capstone. By the end, the same app that started as a bare Pod autoscales on demand, rolls out safely and rolls back on failure, survives a node drain, runs under a least-privilege ServiceAccount, keeps its secrets git-safe with Sealed Secrets, is reconciled from git by Argo CD, and has been **migrated from the local `kind` cluster onto a real Amazon EKS cluster** via a Kustomize overlay over the same base — the state you would hand to an on-call rotation. The morning hardens the app on `kind`; the afternoon stands it up in the cloud. Segment 22 between the two bands is the lunch interlude and has no entry here. Segment 16, the Day 2 Kickoff interlude that opens this stage, is folded in directly below as the Opening framing.
+
+**Opening framing (folded in from segment 16, the Day 2 Kickoff interlude).** This stage opens Day 2, so the instructor carries the workshop's promise back in after students have left overnight. Recap where Stable left off: the same small app is now declarative, health-probed, resource-bounded, fronted by a gateway, and durably backed by CNPG-managed Postgres — the teammate-ready state, running on one local `kind` cluster. Confirm everyone still has a working `stable` cluster, or help them check out the `stable` branch to catch up. Then name the Day 2 promise out loud: by 4:15 that same app autoscales under load, rolls out safely (and rolls back in one command), survives node drains, is RBAC-scoped to a least-privilege ServiceAccount, keeps its secrets git-safe with Sealed Secrets, is driven by Argo CD from git, and runs on a real Amazon EKS cluster. Everything below earns that promise one segment at a time.
 
 **Stage at a glance.**
 - **Delivers:** autoscaling (HPA), safe rollout and one-command rollback, node-drain survival, a least-privilege ServiceAccount, git-safe Sealed Secrets, GitOps reconciliation via Argo CD, and the migration onto a real Amazon EKS cluster.
@@ -67,7 +69,7 @@ Name the tradeoff out loud as you apply it: `--kubelet-insecure-tls` tells metri
 While it warms up, walk the HPA spec out loud. The target is the app's Deployment in the app namespace; the goal is average CPU utilization against the request:
 
 ```bash
-kubectl autoscale deployment sample-app -n <app-namespace> \
+kubectl autoscale deployment sample-app -n app \
   --cpu-percent=50 --min=1 --max=5
 ```
 
@@ -78,7 +80,7 @@ horizontalpodautoscaler.autoscaling/sample-app autoscaled
 Now check the HPA. On the first read the CPU column may still show `<unknown>` — that is `metrics-server` not having scraped yet, not a misconfigured HPA. Re-run after a few seconds and it populates:
 
 ```bash
-kubectl get hpa -n <app-namespace>
+kubectl get hpa -n app
 ```
 
 ```text
@@ -89,14 +91,14 @@ sample-app   Deployment/sample-app   cpu: 2%/50%     1         5         1      
 With a real metric showing, drive load at the data endpoint to push CPU up. Run a small load generator against the app's in-cluster Service from a throwaway Pod so the traffic is realistic:
 
 ```bash
-kubectl run -n <app-namespace> load --rm -it --image=busybox --restart=Never -- \
+kubectl run -n app load --rm -it --image=busybox --restart=Never -- \
   sh -c "while true; do wget -q -O- http://sample-app:8080/<the data endpoint>; done"
 ```
 
 In a second pane, watch the HPA and the replica count respond. CPU climbs past the 50% target and the HPA raises the desired replicas:
 
 ```bash
-kubectl get hpa -n <app-namespace> --watch
+kubectl get hpa -n app --watch
 ```
 
 ```text
@@ -110,7 +112,7 @@ sample-app   Deployment/sample-app   cpu: 61%/50%     1         5         4     
 Stop the load generator (Ctrl-C the load Pod, which deletes it via `--rm`). CPU falls, and after the stabilization window the HPA scales back down — slowly, on purpose. Point out the lag rather than waiting on it:
 
 ```bash
-kubectl get hpa -n <app-namespace>
+kubectl get hpa -n app
 ```
 
 ```text
@@ -158,7 +160,7 @@ Make deploying a new version safe. You walk the Deployment's rolling-update stra
 Show the current rollout strategy on the Deployment. The defaults are a sensible 25%/25%, surfaced here so the numbers are concrete. Use `kubectl describe`, not `-o jsonpath='{.spec.strategy}'`: the controller applies these defaults at runtime and does **not** persist them into `.spec.strategy` unless they were set explicitly, so the jsonpath would render blank on a Deployment that never set them — `describe` shows the resolved values either way:
 
 ```bash
-kubectl describe deployment sample-app -n <app-namespace> | grep -A2 StrategyType
+kubectl describe deployment sample-app -n app | grep -A2 StrategyType
 ```
 
 ```text
@@ -167,12 +169,12 @@ MinReadySeconds:        0
 RollingUpdateStrategy:  25% max unavailable, 25% max surge
 ```
 
-Roll out a good change first so the class sees a healthy rollout complete — bump to a known-good tag and watch `rollout status` march to done:
+Roll out a good change first so the class sees a healthy rollout complete — bump to a known-good tag and watch `rollout status` march to done. The base already runs `:v1`, so `<a-known-good-tag>` must be a **distinct** known-good tag, different from the `:v1` the Deployment is already on — rolling to the tag it already runs is a no-op and the class sees nothing change:
 
 ```bash
-kubectl set image deployment/sample-app -n <app-namespace> \
+kubectl set image deployment/sample-app -n app \
   sample-app=<registry>/<image>:<a-known-good-tag>
-kubectl rollout status deployment/sample-app -n <app-namespace>
+kubectl rollout status deployment/sample-app -n app
 ```
 
 ```text
@@ -184,9 +186,9 @@ deployment "sample-app" successfully rolled out
 Now break it on purpose. Roll out a tag that does not exist (or an image that fails its readiness probe). The new Pod can never become ready, so the rollout stalls — and the old Pods keep serving:
 
 ```bash
-kubectl set image deployment/sample-app -n <app-namespace> \
+kubectl set image deployment/sample-app -n app \
   sample-app=<registry>/<image>:does-not-exist
-kubectl rollout status deployment/sample-app -n <app-namespace> --timeout=60s
+kubectl rollout status deployment/sample-app -n app --timeout=60s
 ```
 
 ```text
@@ -195,23 +197,23 @@ Waiting for deployment "sample-app" rollout to finish: 1 old replicas are pendin
 error: timed out waiting for the condition
 ```
 
-Confirm the stall visually: the new Pod is wedged in `ImagePullBackOff` while the old Pod stays `Running` and serving traffic. The app is **not** down:
+Confirm the stall visually: the new Pod is wedged on the failed pull while the old Pod stays `Running` and serving traffic. The app is **not** down. A failed pull shows briefly as `ErrImagePull` on the first attempt and then settles into `ImagePullBackOff` as kubelet backs off — same wedged-pull signal, so you may catch either status depending on timing:
 
 ```bash
-kubectl get pods -n <app-namespace>
+kubectl get pods -n app
 ```
 
 ```text
 NAME                          READY   STATUS             RESTARTS   AGE
 sample-app-7d9c4b5f8-2xq4r    1/1     Running            0          5m
-sample-app-6c4f9b2a1-pk8wd    0/1     ImagePullBackOff   0          40s
+sample-app-6c4f9b2a1-pk8wd    0/1     ErrImagePull       0          40s
 ```
 
 Recover with one command. `rollout undo` reverts to the last known-good revision, which is already on disk:
 
 ```bash
-kubectl rollout undo deployment/sample-app -n <app-namespace>
-kubectl rollout status deployment/sample-app -n <app-namespace>
+kubectl rollout undo deployment/sample-app -n app
+kubectl rollout status deployment/sample-app -n app
 ```
 
 ```text
@@ -225,7 +227,7 @@ The broken Pod is gone, the desired count is healthy, and the app never dropped 
 
 - **The "broken" rollout completes successfully** — the bad tag actually pulled (it exists), or the image starts and passes readiness anyway. Use a tag you are certain does not exist, or an image whose `/healthz` returns non-200, so readiness genuinely fails and the rollout stalls.
 - **`rollout status` returns immediately as done** before you can show the stall — add `--timeout=60s` so it gives up cleanly with a message instead of hanging the stage. The timeout is how you demonstrate the stall without waiting forever.
-- **`rollout undo` rolls back to the wrong revision** — if you have rolled several times, `kubectl rollout history deployment/sample-app -n <app-namespace>` shows the revisions and `--to-revision=N` targets a specific one. Keep the demo to one good roll then one bad roll so undo is unambiguous.
+- **`rollout undo` rolls back to the wrong revision** — if you have rolled several times, `kubectl rollout history deployment/sample-app -n app` shows the revisions and `--to-revision=N` targets a specific one. Keep the demo to one good roll then one bad roll so undo is unambiguous.
 
 ### Transition
 
@@ -254,7 +256,7 @@ Keep the app serving when a node goes away **on purpose**. You distinguish volun
 Make sure the app has room to lose a Pod — scale to a floor of replicas the drain can work against (the HPA's `--min` is 1, so set a working floor for the demo):
 
 ```bash
-kubectl scale deployment sample-app -n <app-namespace> --replicas=3
+kubectl scale deployment sample-app -n app --replicas=3
 ```
 
 ```text
@@ -264,7 +266,7 @@ deployment.apps/sample-app scaled
 Create the PodDisruptionBudget: at least 2 app Pods must stay available through any voluntary disruption:
 
 ```bash
-kubectl create poddisruptionbudget sample-app -n <app-namespace> \
+kubectl create poddisruptionbudget sample-app -n app \
   --selector=app=sample-app --min-available=2
 ```
 
@@ -275,7 +277,7 @@ poddisruptionbudget.policy/sample-app created
 Confirm the PDB sees the Pods. `ALLOWED DISRUPTIONS` is how many Pods may be evicted right now without breaching the floor:
 
 ```bash
-kubectl get pdb -n <app-namespace>
+kubectl get pdb -n app
 ```
 
 ```text
@@ -283,45 +285,57 @@ NAME         MIN AVAILABLE   MAX UNAVAILABLE   ALLOWED DISRUPTIONS   AGE
 sample-app   2               N/A               1                     10s
 ```
 
-Pick a worker node that is running an app Pod, then drain it. The drain cordons the node and evicts Pods, but the PDB makes it evict the app Pod only after a replacement is ready — so the available count never drops below 2:
+First find which worker is running the database, because you want to drain *around* it. CloudNativePG runs a single Postgres instance here, and it auto-creates a `postgres-primary` PodDisruptionBudget with `minAvailable: 1` / `allowed-disruptions: 0` — its one Pod can never be voluntarily evicted, so a drain of whatever node it sits on will block on that PDB and time out. (In production you would scale CNPG to 2 instances so any worker is drainable; for this single-instance demo you simply pick the other node.) Check where `postgres-1` landed:
 
 ```bash
-kubectl drain kind-worker --ignore-daemonsets --delete-emptydir-data
+kubectl get pod postgres-1 -n app -o wide
 ```
 
 ```text
-node/kind-worker cordoned
-evicting pod <app-namespace>/sample-app-7d9c4b5f8-2xq4r
+NAME         READY   STATUS    RESTARTS   AGE   IP           NODE          NOMINATED NODE   READINESS GATES
+postgres-1   1/1     Running   0          12m   10.244.1.7   kind-worker   <none>           <none>
+```
+
+Drain the worker that is **not** running `postgres-1` — here `postgres-1` is on `kind-worker`, so drain `kind-worker2`. The drain cordons the node and evicts Pods, but the app PDB makes it evict the app Pod only after a replacement is ready — so the available count never drops below 2:
+
+```bash
+kubectl drain kind-worker2 --ignore-daemonsets --delete-emptydir-data
+```
+
+```text
+node/kind-worker2 cordoned
+evicting pod app/sample-app-7d9c4b5f8-2xq4r
 evicting pod kube-system/...
 pod/sample-app-7d9c4b5f8-2xq4r evicted
-node/kind-worker drained
+node/kind-worker2 drained
 ```
 
-Throughout the drain, hit the app — it keeps answering, because the PDB held the floor while Pods moved to the other worker:
+Throughout the drain, hit the app — it keeps answering, because the app PDB held the floor while Pods moved to the other worker. There is no outage; a single sub-second blip is possible if the `nginx-gateway` controller Pod happened to be on the drained node and gets evicted, but traffic recovers instantly:
 
 ```bash
-curl -H "Host: sample-app.local" http://localhost/healthz
+curl -H "Host: sample-app.local" http://localhost:30080/healthz
 ```
 
 ```text
-ok
+{"status":"ok"}
 ```
 
 Uncordon the node when you are done so the cluster goes back to normal for the rest of the morning:
 
 ```bash
-kubectl uncordon kind-worker
+kubectl uncordon kind-worker2
 ```
 
 ```text
-node/kind-worker uncordoned
+node/kind-worker2 uncordoned
 ```
 
-The node went out for maintenance and came back, and a user hitting the app would never have known.
+The node went out for maintenance and came back with no outage — at worst a user saw a single sub-second blip if the gateway controller Pod rode along on the drained node, and it recovered instantly.
 
 ### Watch for
 
-- **The drain hangs and never completes** — the PDB cannot be satisfied because there are not enough replicas to keep the floor while evicting. With `minAvailable: 2` you need at least 3 replicas for the drain to make progress. Confirm the replica count; this is the "single replica blocks the drain" lesson made literal.
+- **The drain hangs on `postgres-1` and times out** — this is the case the `kubectl get pod postgres-1 -o wide` step above exists to avoid. CloudNativePG's single instance has a `postgres-primary` PDB with `allowed-disruptions: 0`, so draining the node it sits on blocks forever with `Cannot evict pod as it would violate the pod's disruption budget`. If you see this, you drained the wrong worker — uncordon it and drain the other one. (Scaling CNPG to 2 instances is the production fix that makes any node drainable.)
+- **The drain hangs on the app Pods** — the app PDB cannot be satisfied because there are not enough replicas to keep the floor while evicting. With `minAvailable: 2` you need at least 3 replicas for the drain to make progress. Confirm the replica count; this is the "single replica blocks the drain" lesson made literal.
 - **`kubectl drain` errors on DaemonSet Pods** — pass `--ignore-daemonsets` (as above). DaemonSet Pods are managed per-node and are expected to stay; the flag tells drain to skip them rather than fail.
 - **`emptyDir` data warning** — `--delete-emptydir-data` acknowledges that any `emptyDir` scratch space on evicted Pods is discarded. On `kind` with this app that is safe; name it so students know the flag is a deliberate acknowledgement, not a workaround.
 
@@ -353,7 +367,7 @@ Give the workload exactly the permissions it needs and nothing more. The app has
 Create a dedicated ServiceAccount for the app in its namespace:
 
 ```bash
-kubectl create serviceaccount sample-app -n <app-namespace>
+kubectl create serviceaccount sample-app -n app
 ```
 
 ```text
@@ -363,7 +377,7 @@ serviceaccount/sample-app created
 Turn off the auto-mounted token, because this app never calls the Kubernetes API — so even a compromised Pod carries no bearer credential:
 
 ```bash
-kubectl patch serviceaccount sample-app -n <app-namespace> \
+kubectl patch serviceaccount sample-app -n app \
   -p '{"automountServiceAccountToken": false}'
 ```
 
@@ -374,7 +388,7 @@ serviceaccount/sample-app patched
 Create a tightly-scoped Role. This app only needs to read its own ConfigMap for non-secret config; that is the entire grant — no Secrets, no Pods, no write verbs:
 
 ```bash
-kubectl create role sample-app -n <app-namespace> \
+kubectl create role sample-app -n app \
   --verb=get,list --resource=configmaps
 ```
 
@@ -385,8 +399,8 @@ role.rbac.authorization.k8s.io/sample-app created
 Bind the Role to the ServiceAccount with a RoleBinding:
 
 ```bash
-kubectl create rolebinding sample-app -n <app-namespace> \
-  --role=sample-app --serviceaccount=<app-namespace>:sample-app
+kubectl create rolebinding sample-app -n app \
+  --role=sample-app --serviceaccount=app:sample-app
 ```
 
 ```text
@@ -396,7 +410,7 @@ rolebinding.rbac.authorization.k8s.io/sample-app created
 Assign the ServiceAccount to the Deployment so its Pods run under that identity instead of `default`. Setting it rolls the Pods:
 
 ```bash
-kubectl set serviceaccount deployment/sample-app -n <app-namespace> sample-app
+kubectl set serviceaccount deployment/sample-app -n app sample-app
 ```
 
 ```text
@@ -406,8 +420,8 @@ deployment.apps/sample-app serviceaccount updated
 Prove the scope with `kubectl auth can-i` impersonating the ServiceAccount. It can read ConfigMaps (granted) but cannot read Secrets (deliberately not granted):
 
 ```bash
-kubectl auth can-i get configmaps -n <app-namespace> \
-  --as=system:serviceaccount:<app-namespace>:sample-app
+kubectl auth can-i get configmaps -n app \
+  --as=system:serviceaccount:app:sample-app
 ```
 
 ```text
@@ -415,8 +429,8 @@ yes
 ```
 
 ```bash
-kubectl auth can-i get secrets -n <app-namespace> \
-  --as=system:serviceaccount:<app-namespace>:sample-app
+kubectl auth can-i get secrets -n app \
+  --as=system:serviceaccount:app:sample-app
 ```
 
 ```text
@@ -429,7 +443,7 @@ The app runs under an identity that can do its job and nothing else. If this Pod
 
 - **App Pods crash after the ServiceAccount change** — the app may have been relying on a permission the default ServiceAccount had that the new Role does not grant. Check `kubectl logs` for an RBAC `forbidden` error; the fix is to add the *specific* missing verb to the Role, not to widen it back to the default. That investigation is itself the least-privilege lesson.
 - **`auth can-i` says `yes` to something you did not grant** — a broader binding (often a `ClusterRoleBinding` from a previous experiment, or the namespace default) is still in effect. `kubectl get rolebindings,clusterrolebindings -A -o wide | grep sample-app` shows every binding touching the subject.
-- **Typo in the `--serviceaccount` argument** — the form is `<namespace>:<name>`; a wrong namespace silently binds nothing useful. Confirm with `kubectl get rolebinding sample-app -n <app-namespace> -o yaml` that the subject matches the ServiceAccount you created.
+- **Typo in the `--serviceaccount` argument** — the form is `<namespace>:<name>`; a wrong namespace silently binds nothing useful. Confirm with `kubectl get rolebinding sample-app -n app -o yaml` that the subject matches the ServiceAccount you created.
 
 ### Transition
 
@@ -459,8 +473,8 @@ Install Argo CD into its own namespace from the upstream manifests:
 
 ```bash
 kubectl create namespace argocd
-kubectl apply -n argocd \
-  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl apply --server-side -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.4.3/manifests/install.yaml
 ```
 
 ```text
@@ -504,12 +518,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: <your-repo-url>
-    targetRevision: production
-    path: k8s/base
+    repoURL: https://github.com/ALT-F4-LLC/fem-kubernetes
+    targetRevision: main
+    path: manifests/day-one/k8s/base
   destination:
     server: https://kubernetes.default.svc
-    namespace: <app-namespace>
+    namespace: app
   syncPolicy:
     automated: { prune: true, selfHeal: true }
 EOF
@@ -533,7 +547,7 @@ sample-app   Synced        Healthy
 Now the drift demo. Hand-edit a live resource — exactly what GitOps is meant to catch — and watch Argo CD report the cluster no longer matches git:
 
 ```bash
-kubectl scale deployment sample-app -n <app-namespace> --replicas=4
+kubectl scale deployment sample-app -n app --replicas=4
 kubectl get application sample-app -n argocd
 ```
 
@@ -545,7 +559,7 @@ sample-app   OutOfSync     Healthy
 With `selfHeal: true` in the sync policy, Argo CD drives the replica count back to what git says — the manual change is reverted automatically. Point at the UI showing the diff, then let it heal:
 
 ```bash
-kubectl get deployment sample-app -n <app-namespace>
+kubectl get deployment sample-app -n app
 ```
 
 ```text
@@ -557,7 +571,9 @@ Git won. The cluster is back to what the repository says, and no one applied it 
 
 ### Watch for
 
+- **Install errors on the `applicationsets` CRD being too large** — a plain `kubectl apply` (client-side) fails with `metadata.annotations: Too long: may not be more than 262144 bytes`, because the CRD exceeds kubectl's 256KB `last-applied-configuration` annotation limit. The `--server-side` flag above avoids this entirely on a fresh install. You only need to add `--force-conflicts` as a recovery step if a prior **client-side** apply already touched these resources and left field-manager conflicts behind — it is not needed for the clean install shown here.
 - **Argo CD install drags and eats the budget** — 30 minutes is enough for the install plus **one** synced `Application` only. If the install is slow, get the one app synced and **move the drift demonstration to segment 28** (per the OUTLINE time-budget note); keep this segment to "installed and one app synced."
+- **The `OutOfSync` window flashes by before you can show it** — on this small cluster `selfHeal` drives the manual change back in ~1-2s, so `OutOfSync` can revert faster than a `kubectl get` or a UI poll catches. To actually show the drift, momentarily set `selfHeal: false` on the `Application` (re-enable it after), keep a fast eye on the UI right after the hand-edit, or have a pre-staged screenshot of the `OutOfSync` state ready.
 - **`Application` stuck `OutOfSync` and never syncs** — usually `repoURL` / `path` / `targetRevision` does not resolve, or the repo is private and Argo CD has no credentials. Check the app's conditions in the UI or `kubectl describe application sample-app -n argocd`; the error names the unreachable repo or path.
 - **Port-forward to the UI fails TLS** — `argocd-server` serves HTTPS on 443; forward to the local port and accept the self-signed cert in the browser, or use `--insecure` on the UI. This is a `kind`-local convenience, not how you would expose Argo CD for real.
 
@@ -593,7 +609,7 @@ eksctl create cluster -f eks-cluster.yaml
 
 ```text
 2026-06-03 12:46:01 [ℹ]  eksctl version 0.x.x
-2026-06-03 12:46:01 [ℹ]  using region <region>
+2026-06-03 12:46:01 [ℹ]  using region us-west-2
 2026-06-03 12:46:02 [ℹ]  building cluster stack "eksctl-fem-workshop-cluster"
 2026-06-03 12:46:03 [ℹ]  deploying stack "eksctl-fem-workshop-cluster" ...
 ```
@@ -638,7 +654,7 @@ service/sealed-secrets-controller created
 Create the plaintext Secret **locally only** — never applied to the cluster, never committed. Note what `db-extra` is and is not: it is a contrived, illustrative throwaway Secret that exists **only** to demonstrate the sealing workflow — the app never reads it. The credential the app actually consumes is CloudNativePG's auto-generated `postgres-app` Secret from Stable segment 13; `db-extra` is a stand-in so we can seal something without touching the real database wiring. The password is an obviously-fake demo value, and we redirect to a local file we will seal and then delete. This prints nothing on success — the manifest goes to `db-extra-secret.yaml` rather than the cluster:
 
 ```bash
-kubectl create secret generic db-extra -n <app-namespace> \
+kubectl create secret generic db-extra -n app \
   --from-literal=password=demo-not-a-real-password \
   --dry-run=client -o yaml > db-extra-secret.yaml
 ```
@@ -675,7 +691,7 @@ sealedsecret.bitnami.com/db-extra created
 Watch the controller decrypt the `SealedSecret` into a real Secret in the cluster — the resource you can commit produced the resource the app consumes:
 
 ```bash
-kubectl get sealedsecret,secret db-extra -n <app-namespace>
+kubectl get sealedsecret,secret db-extra -n app
 ```
 
 ```text
@@ -730,11 +746,11 @@ Meet the EKS cluster that has been provisioning since the top of segment 23 — 
 The cluster came up under segment 23's background provision. Point `kubectl` at the EKS context `eksctl` created (substitute your region and cluster name):
 
 ```bash
-kubectl config use-context <your-aws-account>@fem-workshop.<region>.eksctl.io
+kubectl config use-context <your-aws-account>@fem-workshop.us-west-2.eksctl.io
 ```
 
 ```text
-Switched to context "<your-aws-account>@fem-workshop.<region>.eksctl.io".
+Switched to context "<your-aws-account>@fem-workshop.us-west-2.eksctl.io".
 ```
 
 Confirm the cluster is live — the managed nodes should be `Ready`. These are real EC2 instances, not containers on a laptop:
@@ -745,8 +761,8 @@ kubectl get nodes
 
 ```text
 NAME                                          STATUS   ROLES    AGE   VERSION
-ip-192-168-12-34.<region>.compute.internal    Ready    <none>   3m    v1.3x.x-eks-xxxxx
-ip-192-168-56-78.<region>.compute.internal    Ready    <none>   3m    v1.3x.x-eks-xxxxx
+ip-192-168-12-34.us-west-2.compute.internal    Ready    <none>   3m    v1.3x.x-eks-xxxxx
+ip-192-168-56-78.us-west-2.compute.internal    Ready    <none>   3m    v1.3x.x-eks-xxxxx
 ```
 
 Show where the control plane lives — a managed AWS endpoint, not a local port:
@@ -756,8 +772,8 @@ kubectl cluster-info
 ```
 
 ```text
-Kubernetes control plane is running at https://XXXXXXXX.gr7.<region>.eks.amazonaws.com
-CoreDNS is running at https://XXXXXXXX.gr7.<region>.eks.amazonaws.com/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy
+Kubernetes control plane is running at https://XXXXXXXX.gr7.us-west-2.eks.amazonaws.com
+CoreDNS is running at https://XXXXXXXX.gr7.us-west-2.eks.amazonaws.com/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy
 ```
 
 Name the gaps out loud — what EKS does *not* yet have that `kind` did. There is no local-path provisioner, no NGINX Gateway Fabric or any other Gateway controller, and no Sealed Secrets controller here. Show that the default StorageClass story is different by listing what exists:
@@ -807,7 +823,7 @@ Enable the EBS CSI driver as a managed EKS add-on (substitute your cluster name 
 
 ```bash
 eksctl create addon --name aws-ebs-csi-driver \
-  --cluster fem-workshop --region <region> --force
+  --cluster fem-workshop --region us-west-2 --force
 ```
 
 ```text
@@ -864,7 +880,7 @@ gp3 (default)   ebs.csi.aws.com         Delete          WaitForFirstConsumer   2
 Now apply the **unchanged** CNPG `Cluster` manifest from Stable — the same database definition, no edits — and watch its PVC bind to a real EBS volume through gp3. (The CloudNativePG operator install precedes this on EKS just as it did on `kind`; install it first if not already present.) Show the PVC binding:
 
 ```bash
-kubectl get pvc -n <app-namespace>
+kubectl get pvc -n app
 ```
 
 ```text
@@ -875,7 +891,7 @@ postgres-1   Bound    pvc-a1b2c3   10Gi       RWO            gp3            45s
 The same Postgres manifest that ran on local-path now runs on durable EBS — proof in the AWS console, where a real gp3 volume now exists:
 
 ```bash
-aws ec2 describe-volumes --region <region> \
+aws ec2 describe-volumes --region us-west-2 \
   --filters Name=tag:kubernetes.io/created-for/pvc/name,Values=postgres-1 \
   --query 'Volumes[].{ID:VolumeId,Type:VolumeType,Size:Size}'
 ```
@@ -890,7 +906,7 @@ The manifest was portable; only the storage class behind it changed. Note the vo
 
 ### Watch for
 
-- **PVC stuck `Pending`** — most often the EBS CSI driver is not healthy or its IAM permissions are missing. `kubectl describe pvc -n <app-namespace>` shows the provisioning event; if it names a permissions error, the add-on's IAM role did not attach — re-run the `eksctl create addon` with the IAM service-account wiring.
+- **PVC stuck `Pending`** — most often the EBS CSI driver is not healthy or its IAM permissions are missing. `kubectl describe pvc -n app` shows the provisioning event; if it names a permissions error, the add-on's IAM role did not attach — re-run the `eksctl create addon` with the IAM service-account wiring.
 - **Volume created in the wrong AZ / Pod cannot schedule** — happens when the StorageClass binds early (`Immediate`) instead of `WaitForFirstConsumer`. Confirm the StorageClass uses late binding as written above; EBS volumes are zonal and must be created where the Pod lands.
 - **Two default StorageClasses** — if `gp2` is also marked default, scheduling is ambiguous. `kubectl get storageclass` shows which carry `(default)`; patch `gp2` to remove its default annotation so only `gp3` is default.
 
@@ -922,8 +938,8 @@ The controller needs IAM permissions to manage load balancers. Associate the clu
 
 ```bash
 eksctl utils associate-iam-oidc-provider --cluster fem-workshop \
-  --region <region> --approve
-eksctl create iamserviceaccount --cluster fem-workshop --region <region> \
+  --region us-west-2 --approve
+eksctl create iamserviceaccount --cluster fem-workshop --region us-west-2 \
   --namespace kube-system --name aws-load-balancer-controller \
   --attach-policy-arn arn:aws:iam::<your-aws-account>:policy/AWSLoadBalancerControllerIAMPolicy \
   --approve
@@ -981,7 +997,7 @@ apiVersion: gateway.k8s.aws/v1beta1
 kind: LoadBalancerConfiguration
 metadata:
   name: alb-internet-facing
-  namespace: <app-namespace>
+  namespace: app
 spec:
   scheme: internet-facing
 ---
@@ -989,7 +1005,7 @@ apiVersion: gateway.k8s.aws/v1beta1
 kind: TargetGroupConfiguration
 metadata:
   name: alb-target-ip
-  namespace: <app-namespace>
+  namespace: app
 spec:
   targetReference:
     name: sample-app
@@ -1006,7 +1022,7 @@ spec:
     group: gateway.k8s.aws
     kind: LoadBalancerConfiguration
     name: alb-internet-facing
-    namespace: <app-namespace>
+    namespace: app
 EOF
 ```
 
@@ -1024,7 +1040,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: sample-app
-  namespace: <app-namespace>
+  namespace: app
 spec:
   gatewayClassName: alb
   listeners:
@@ -1036,7 +1052,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: sample-app
-  namespace: <app-namespace>
+  namespace: app
 spec:
   parentRefs:
     - name: sample-app
@@ -1059,18 +1075,18 @@ httproute.gateway.networking.k8s.io/sample-app created
 Watch the controller provision a real ALB and populate the `Gateway` address with the ALB's DNS name — this takes a minute or two as AWS creates the load balancer. The `Gateway` reports `PROGRAMMED` once the ALB is wired up, exactly as it did on `kind`:
 
 ```bash
-kubectl get gateway sample-app -n <app-namespace>
+kubectl get gateway sample-app -n app
 ```
 
 ```text
 NAME         CLASS   ADDRESS                                                       PROGRAMMED   AGE
-sample-app   alb     k8s-sampleapp-xxxx-1234567890.<region>.elb.amazonaws.com      True         90s
+sample-app   alb     k8s-sampleapp-xxxx-1234567890.us-west-2.elb.amazonaws.com      True         90s
 ```
 
 Hit the app through the ALB's public DNS name — traffic now enters through real AWS infrastructure, not a port-forward:
 
 ```bash
-curl http://k8s-sampleapp-xxxx-1234567890.<region>.elb.amazonaws.com/healthz
+curl http://k8s-sampleapp-xxxx-1234567890.us-west-2.elb.amazonaws.com/healthz
 ```
 
 ```text
@@ -1081,8 +1097,8 @@ The identical `Gateway` and `HTTPRoute` that ran behind NGINX Gateway Fabric on 
 
 ### Watch for
 
-- **The `Gateway` never goes `PROGRAMMED` (no `ADDRESS`)** — the controller is not running, lacks IAM permissions, the `GatewayClass` `parametersRef` points at a missing `LoadBalancerConfiguration`, or the `gatewayClassName` does not match an installed `GatewayClass`. `kubectl describe gateway sample-app -n <app-namespace>` and `kubectl get gatewayclass alb -o "jsonpath={.status.conditions}"` show the status; a missing-permissions error means the IAM service account did not attach the policy, and an `alb` class that never reaches `Accepted` usually means its `parametersRef` target does not exist.
-- **The `HTTPRoute` is not `Accepted`** — `kubectl get httproute sample-app -n <app-namespace> -o "jsonpath={.status.parents}"` should show `Accepted=True`; if not, its `parentRefs` name does not match the `Gateway` in the same namespace. This is the same condition you watched on `kind`.
+- **The `Gateway` never goes `PROGRAMMED` (no `ADDRESS`)** — the controller is not running, lacks IAM permissions, the `GatewayClass` `parametersRef` points at a missing `LoadBalancerConfiguration`, or the `gatewayClassName` does not match an installed `GatewayClass`. `kubectl describe gateway sample-app -n app` and `kubectl get gatewayclass alb -o "jsonpath={.status.conditions}"` show the status; a missing-permissions error means the IAM service account did not attach the policy, and an `alb` class that never reaches `Accepted` usually means its `parametersRef` target does not exist.
+- **The `HTTPRoute` is not `Accepted`** — `kubectl get httproute sample-app -n app -o "jsonpath={.status.parents}"` should show `Accepted=True`; if not, its `parentRefs` name does not match the `Gateway` in the same namespace. This is the same condition you watched on `kind`.
 - **ALB provisions but returns 503** — the target group has no healthy targets, usually because `targetType: ip` (set in the `TargetGroupConfiguration`) requires the VPC CNI (which EKS has) and the Service/Pod readiness must pass. Confirm the app Pods are `Ready` and the Service selector matches; the ALB health check follows readiness.
 - **Subnet discovery fails** (`couldn't auto-discover subnets`) — the ALB controller finds subnets by tag. On an `eksctl`-created cluster the subnets are tagged automatically; on the fallback cluster confirm the `kubernetes.io/role/elb` tags exist on the public subnets.
 
@@ -1104,7 +1120,7 @@ Express the difference between `kind` and EKS without editing the manifests. EKS
 ### Talking points
 
 - **The base from segment 14 stays exactly as it is.** Overlays **patch** the base; they do not rewrite it. Everything common to both environments — the Deployment shape, the Service, the probes, the CNPG `Cluster` — lives in the base unchanged. We are adding two thin overlays beside it, not forking the manifests.
-- **An overlay is a set of patches plus a reference to the base.** Each overlay's `kustomization.yaml` names the base as a resource and lists patches that change only what differs for that environment. `kustomize build overlays/eks` produces the base with the EKS patches applied; `overlays/kind` does the same for `kind`.
+- **An overlay is a set of patches plus a reference to the base.** Each overlay's `kustomization.yaml` names the base as a resource and lists patches that change only what differs for that environment. `kustomize build manifests/day-two/k8s/overlays/eks` produces the base with the EKS patches applied; `manifests/day-two/k8s/overlays/kind` does the same for `kind`.
 - **What actually differs is small and concrete.** `kind`: local-path storage, the `nginx` GatewayClass, a low replica count. `eks`: the gp3 StorageClass, the `alb` GatewayClass, a higher replica count. Two short patch sets — not two copies of the app. Seeing how little differs is the lesson.
 - **This is a migration aid, not multi-cluster.** The overlays let the same base run on a real cloud cluster; they do not run both clusters at once. Each overlay is reconciled by *that cluster's own* Argo CD (the `kind` base by segment 21's Argo CD, the `eks` overlay by segment 28's). There is no single Argo CD spanning both.
 
@@ -1113,7 +1129,7 @@ Express the difference between `kind` and EKS without editing the manifests. EKS
 Show the existing base from segment 14 — untouched — so it is clear what the overlays sit on top of:
 
 ```bash
-ls k8s/base
+ls manifests/day-one/k8s/base
 ```
 
 ```text
@@ -1121,14 +1137,14 @@ deployment.yaml  service.yaml  gateway.yaml  httproute.yaml
 configmap.yaml  postgres-cluster.yaml  kustomization.yaml
 ```
 
-Create the `kind` overlay: it references the base and patches in the values `kind` used — the local-path storage class, the `nginx` gateway class, and a low replica count. Writing the heredoc prints nothing on success — `overlays/kind/kustomization.yaml` is created:
+Create the `kind` overlay: it references the base and patches in the values `kind` used — the local-path storage class, the `nginx` gateway class, and a low replica count. Writing the heredoc prints nothing on success — `manifests/day-two/k8s/overlays/kind/kustomization.yaml` is created:
 
 ```bash
-cat > overlays/kind/kustomization.yaml <<'EOF'
+cat > manifests/day-two/k8s/overlays/kind/kustomization.yaml <<'EOF'
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - ../../base
+  - ../../../../day-one/k8s/base
 patches:
   - path: gateway-class-nginx.yaml
     target: { kind: Gateway, name: sample-app }
@@ -1137,14 +1153,14 @@ patches:
 EOF
 ```
 
-Create the `eks` overlay: same base, but patched with the EKS-specific values — the `alb` GatewayClass (the ALB's behaviour lives in the `LoadBalancerConfiguration` and `TargetGroupConfiguration` CRDs the class references by `parametersRef`, applied in segment 26, not in this patch), the gp3 storage class on the CNPG `Cluster`, and a higher replica count. This too prints nothing on success, writing `overlays/eks/kustomization.yaml`:
+Create the `eks` overlay: same base, but patched with the EKS-specific values — the `alb` GatewayClass (the ALB's behaviour lives in the `LoadBalancerConfiguration` and `TargetGroupConfiguration` CRDs the class references by `parametersRef`, applied in segment 26, not in this patch), the gp3 storage class on the CNPG `Cluster`, and a higher replica count. This too prints nothing on success, writing `manifests/day-two/k8s/overlays/eks/kustomization.yaml`:
 
 ```bash
-cat > overlays/eks/kustomization.yaml <<'EOF'
+cat > manifests/day-two/k8s/overlays/eks/kustomization.yaml <<'EOF'
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - ../../base
+  - ../../../../day-one/k8s/base
 patches:
   - path: gateway-class-alb.yaml
     target: { kind: Gateway, name: sample-app }
@@ -1160,7 +1176,7 @@ The five patch bodies these overlays reference — `gateway-class-nginx.yaml`, `
 Confirm the base is unchanged by building the `eks` overlay and diffing the rendered output against the bare base — the only differences are the patched fields, proving the overlay patches rather than rewrites:
 
 ```bash
-diff <(kubectl kustomize k8s/base) <(kubectl kustomize overlays/eks) | head -20
+diff <(kubectl kustomize manifests/day-one/k8s/base) <(kubectl kustomize manifests/day-two/k8s/overlays/eks) | head -20
 ```
 
 ```text
@@ -1177,9 +1193,9 @@ A handful of lines differ — the gateway class, the storage class, the replica 
 
 ### Watch for
 
-- **`kustomize build` errors on a patch target that does not match** — the `target` selector (kind + name) must match a resource the base actually produces. A typo in the kind or name silently patches nothing or errors; confirm the target names against `kubectl kustomize k8s/base`.
+- **`kustomize build` errors on a patch target that does not match** — the `target` selector (kind + name) must match a resource the base actually produces. A typo in the kind or name silently patches nothing or errors; confirm the target names against `kubectl kustomize manifests/day-one/k8s/base`.
 - **A tempted edit to the base** — if a value "needs" to change for both environments, that belongs in the base; if it differs *between* them, it belongs in an overlay patch. The failure mode is editing the base to fix EKS and breaking `kind`. Keep environment-specific values out of the base entirely.
-- **Overlay path wrong (`../../base` does not resolve)** — Kustomize resolves the base path relative to the overlay's own `kustomization.yaml`. From `overlays/eks/` the base is two levels up; an off-by-one here is the most common "resource not found" build error.
+- **Overlay path wrong (`../../../../day-one/k8s/base` does not resolve)** — Kustomize resolves the base path relative to the overlay's own `kustomization.yaml`. From `manifests/day-two/k8s/overlays/eks/` the day-one base is four levels up; an off-by-one here is the most common "resource not found" build error.
 
 ### Transition
 
@@ -1212,7 +1228,7 @@ kubectl config current-context
 ```
 
 ```text
-<your-aws-account>@fem-workshop.<region>.eksctl.io
+<your-aws-account>@fem-workshop.us-west-2.eksctl.io
 ```
 
 **Step 1 — Install the Sealed Secrets controller on EKS** — its own controller, its own key:
@@ -1227,14 +1243,14 @@ kubectl apply -f \
 deployment.apps/sealed-secrets-controller created
 ```
 
-**Step 2 — Seal the EKS copy of the Postgres Secret** against *this* cluster's key. Same fake demo value, sealed locally, written into the `eks` overlay — the plaintext never touches git. The pipeline prints nothing on success; the EKS-sealed, git-safe resource lands in `overlays/eks/sealed-db-extra.yaml`:
+**Step 2 — Seal the EKS copy of the Postgres Secret** against *this* cluster's key. Same fake demo value, sealed locally, written into the `eks` overlay — the plaintext never touches git. The pipeline prints nothing on success; the EKS-sealed, git-safe resource lands in `manifests/day-two/k8s/overlays/eks/sealed-db-extra.yaml`:
 
 ```bash
-kubectl create secret generic db-extra -n <app-namespace> \
+kubectl create secret generic db-extra -n app \
   --from-literal=password=demo-not-a-real-password \
   --dry-run=client -o yaml \
   | kubeseal --controller-namespace kube-system --format yaml \
-  > overlays/eks/sealed-db-extra.yaml
+  > manifests/day-two/k8s/overlays/eks/sealed-db-extra.yaml
 ```
 
 Call out the improvement over segment 23: piping the plaintext straight into `kubeseal` over stdin is strictly **safer** than segment 23's write-to-disk-then-`rm` pattern, because the plaintext manifest never lands on disk at all — there is no temporary file to forget to delete, and nothing for `git add` to catch by accident. Only the sealed output is ever written. Prefer this stdin pattern wherever you can.
@@ -1243,8 +1259,8 @@ Call out the improvement over segment 23: piping the plaintext straight into `ku
 
 ```bash
 kubectl create namespace argocd
-kubectl apply -n argocd \
-  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl apply --server-side -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.4.3/manifests/install.yaml
 kubectl rollout status deployment/argocd-server -n argocd
 ```
 
@@ -1265,12 +1281,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: <your-repo-url>
-    targetRevision: production
-    path: overlays/eks
+    repoURL: https://github.com/ALT-F4-LLC/fem-kubernetes
+    targetRevision: main
+    path: manifests/day-two/k8s/overlays/eks
   destination:
     server: https://kubernetes.default.svc
-    namespace: <app-namespace>
+    namespace: app
   syncPolicy:
     automated: { prune: true, selfHeal: true }
 EOF
@@ -1295,7 +1311,7 @@ The same repository that drove `kind` this morning now drives EKS this afternoon
 
 ### Watch for
 
-- **`Application` syncs the wrong path** — if it points at `k8s/base` instead of `overlays/eks`, the cloud cluster gets the `kind` values (nginx gateway class, low replicas). Confirm `path: overlays/eks` in the `Application`; this is the single most likely cause of "EKS came up with the wrong config."
+- **`Application` syncs the wrong path** — if it points at `manifests/day-one/k8s/base` instead of `manifests/day-two/k8s/overlays/eks`, the cloud cluster gets the `kind` values (nginx gateway class, low replicas). Confirm `path: manifests/day-two/k8s/overlays/eks` in the `Application`; this is the single most likely cause of "EKS came up with the wrong config."
 - **Sealed secret will not decrypt on EKS** (`no key could decrypt secret`) — the `SealedSecret` was sealed against `kind`'s key, not EKS's. That is the per-cluster-key lesson firing: re-seal against the EKS controller (as above) into the `eks` overlay. A `kind`-sealed copy in the `eks` overlay is the classic mistake.
 - **Accidentally on the `kind` context** — installing Argo CD or sealing "on EKS" while `current-context` is `kind-kind` puts everything on the wrong cluster. The `current-context` check at the top of this segment is the guard; re-run it if anything lands unexpectedly.
 
@@ -1326,7 +1342,7 @@ See what the cluster is doing without deploying an in-cluster observability stac
 Live resource use, per Pod, in the app namespace — the built-in `top`:
 
 ```bash
-kubectl top pods -n <app-namespace>
+kubectl top pods -n app
 ```
 
 ```text
@@ -1344,14 +1360,14 @@ kubectl top nodes
 
 ```text
 NAME                                          CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%
-ip-192-168-12-34.<region>.compute.internal    95m          4%     820Mi           11%
-ip-192-168-56-78.<region>.compute.internal    78m          3%     760Mi           10%
+ip-192-168-12-34.us-west-2.compute.internal    95m          4%     820Mi           11%
+ip-192-168-56-78.us-west-2.compute.internal    78m          3%     760Mi           10%
 ```
 
 The cluster's running narration — recent events in the app namespace, newest last:
 
 ```bash
-kubectl get events -n <app-namespace> --sort-by=.lastTimestamp | tail -5
+kubectl get events -n app --sort-by=.lastTimestamp | tail -5
 ```
 
 ```text
@@ -1365,7 +1381,7 @@ LAST SEEN   TYPE     REASON      OBJECT                             MESSAGE
 Enable EKS CloudWatch Container Insights as a managed add-on — the platform collecting metrics for you, no in-cluster stack:
 
 ```bash
-aws eks create-addon --cluster-name fem-workshop --region <region> \
+aws eks create-addon --cluster-name fem-workshop --region us-west-2 \
   --addon-name amazon-cloudwatch-observability
 ```
 
@@ -1419,7 +1435,7 @@ Tear the EKS cluster down completely — and verify nothing was left behind to k
 Start the deletion. It runs for several minutes in the background while you walk the orphaned-resource check — do not wait silently on it:
 
 ```bash
-eksctl delete cluster -f eks-cluster.yaml --region <region>
+eksctl delete cluster -f eks-cluster.yaml --region us-west-2
 ```
 
 ```text
@@ -1431,7 +1447,7 @@ eksctl delete cluster -f eks-cluster.yaml --region <region>
 While that runs, check for orphaned load balancers — there should be none once the controller cleaned up the ALB from the deleted `Gateway`. An empty result is the goal:
 
 ```bash
-aws elbv2 describe-load-balancers --region <region> \
+aws elbv2 describe-load-balancers --region us-west-2 \
   --query 'LoadBalancers[?contains(LoadBalancerName, `k8s-sampleapp`)].LoadBalancerArn'
 ```
 
@@ -1442,7 +1458,7 @@ aws elbv2 describe-load-balancers --region <region> \
 Check for orphaned EBS volumes — the gp3 volumes from segment 25 should be gone (the CNPG PVCs and their volumes deleted with the cluster). `available` volumes with the cluster tag are the orphans to watch for; an empty result means clean:
 
 ```bash
-aws ec2 describe-volumes --region <region> \
+aws ec2 describe-volumes --region us-west-2 \
   --filters Name=tag:kubernetes.io/cluster/fem-workshop,Values=owned Name=status,Values=available \
   --query 'Volumes[].VolumeId'
 ```
@@ -1454,18 +1470,18 @@ aws ec2 describe-volumes --region <region> \
 Both checks above returned an empty list, which is the clean case and the one you want students to see. Run the next two commands only if a check came back non-empty — name this on stage so students know the recovery, not just the happy path. Substitute the volume ID or load-balancer ARN the check above printed for the placeholders:
 
 ```bash
-aws ec2 delete-volume --region <region> --volume-id <volume-id>
-aws elbv2 delete-load-balancer --region <region> --load-balancer-arn <load-balancer-arn>
+aws ec2 delete-volume --region us-west-2 --volume-id <volume-id>
+aws elbv2 delete-load-balancer --region us-west-2 --load-balancer-arn <load-balancer-arn>
 ```
 
 Confirm the cluster itself is gone once the delete finishes — `eksctl` lists no cluster, and the context can be removed:
 
 ```bash
-eksctl get cluster --region <region>
+eksctl get cluster --region us-west-2
 ```
 
 ```text
-No clusters found in <region>.
+No clusters found in us-west-2.
 ```
 
 The cluster is down, no volumes or load balancers were left behind, and nothing is billing. That verification — not just the delete command — is the discipline. No one leaves Day 2 with a running EKS cluster.

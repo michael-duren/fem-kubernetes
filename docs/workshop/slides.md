@@ -620,7 +620,7 @@ sample-app   nginx   localhost   True         20s
 
 $ curl -H "Host: sample-app.local" \
     http://localhost:30080/healthz
-ok
+{"status":"ok"}
 ```
 
 One curl, both runtimes - the data-plane Pod is pinned to the control-plane node, so Docker Desktop and OrbStack both reach localhost:30080.
@@ -770,7 +770,7 @@ $ kubectl apply -k manifests/day-one/k8s/base
 
 ---
 
-# Day 1 Wrap-up
+# Wrap-up
 
 ---
 
@@ -782,11 +782,9 @@ Imperative POC to declarative Stable - all on one `kind` cluster.
 
 ---
 
-## ...you made it through Day 1
+## ...you made it so far
 
 ![recap](https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExMTduYnFyd2hiamh6eDllNXZodDVibzR3NnFjcmhjN3c2aDNrYm1mYiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/sBLcw5Ic4QUTK/giphy.gif)
-
-Leave the cluster as-is, or check out the `stable` branch tomorrow.
 
 ---
 
@@ -794,19 +792,17 @@ Leave the cluster as-is, or check out the `stable` branch tomorrow.
 
 ![h:430 Two-day day-shape: Foundations, POC, and Stable behind us on Day 1; Production hardening and the EKS capstone ahead on Day 2](img/diagrams/day-shape.svg)
 
-Refresh the whole climb - then look at what Day 2 adds.
-
 ---
 
-## Tomorrow: the right-hand column
+## The right-hand column
 
 - Your `kind` cluster is the left-hand, edge end of that picture
-- Day 2 is the journey to the managed cloud build
-- Production hardens it; the EKS capstone runs it for real
+- Right-hand column is the journey to the managed cloud build
+- Production hardens it; the EKS cluster runs it for real
 
 ---
 
-# Day 2 Kickoff
+# Kickoff
 
 ---
 
@@ -819,30 +815,20 @@ Refresh the whole climb - then look at what Day 2 adds.
 
 ---
 
-<!-- _class: invert stage-interlude -->
-
-## The Day 2 promise - by 4:15 the same app
+## In the end, the same app
 
 - Autoscales under load
 - Rolls out safely, with a rollback story
 - Is RBAC-scoped, keeps its secrets git-safe
 - Is driven by Argo CD from git - and runs on EKS
 
-<!-- ===== SEGMENT 17 · Production · Autoscaling with HPA ===== -->
-
 ---
 
-<!-- _class: invert lead stage-production divider -->
-
 # Autoscaling with HPA
-
-Segment 17 - Production
 
 > "The app sizes itself to load - no human typing `scale`."
 
 ---
-
-<!-- _class: invert stage-production -->
 
 ## The control loop, applied to capacity
 
@@ -852,8 +838,6 @@ Segment 17 - Production
 - Percentage is against the Pod's CPU **request** (set back in Stable)
 
 ---
-
-<!-- _class: invert stage-production -->
 
 ## metrics-server first, then the HPA
 
@@ -873,8 +857,6 @@ horizontalpodautoscaler.autoscaling/sample-app autoscaled
 
 ---
 
-<!-- _class: invert stage-production -->
-
 ## Drive load - watch replicas climb, then settle
 
 ```bash
@@ -891,19 +873,11 @@ sample-app   Deployment/sample-app   cpu: 61%/50%   4
 
 It grew under load and shrinks back - scale-down lags on purpose.
 
-<!-- ===== SEGMENT 18 · Production · Safe Rollouts & Rollbacks ===== -->
-
 ---
-
-<!-- _class: invert lead stage-production divider -->
 
 # Safe Rollouts & Rollbacks
 
-Segment 18 - Production
-
 ---
-
-<!-- _class: invert stage-production -->
 
 ## A rolling update, gated by the probe
 
@@ -913,8 +887,6 @@ Segment 18 - Production
 - A stalled rollout is the guardrail working, not a failure
 
 ---
-
-<!-- _class: invert stage-production -->
 
 ## Break it on purpose - the rollout stalls
 
@@ -926,16 +898,14 @@ Waiting for deployment rollout to finish: 1 old replicas...
 error: timed out waiting for the condition
 
 $ kubectl get pods
-NAME                       READY  STATUS            RESTARTS
-sample-app-7d9c4b5f8-2xq4r 1/1    Running           0
-sample-app-6c4f9b2a1-pk8wd 0/1    ImagePullBackOff  0
+NAME                       READY  STATUS         RESTARTS
+sample-app-7d9c4b5f8-2xq4r 1/1    Running        0
+sample-app-6c4f9b2a1-pk8wd 0/1    ErrImagePull   0
 ```
 
-New Pod wedged, old Pod still serving - the app is **not** down.
+`ErrImagePull` first, then settles into `ImagePullBackOff` - new Pod wedged, old Pod still serving, the app is **not** down.
 
 ---
-
-<!-- _class: invert lead stage-production -->
 
 ## ...it caught it
 
@@ -949,19 +919,11 @@ deployment "sample-app" successfully rolled out
 
 `undo` reverts to the last known-good ReplicaSet - already on disk.
 
-<!-- ===== SEGMENT 19 · Production · PodDisruptionBudgets & Node Drains ===== -->
-
 ---
-
-<!-- _class: invert lead stage-production divider -->
 
 # PodDisruptionBudgets & Node Drains
 
-Segment 19 - Production
-
 ---
-
-<!-- _class: invert stage-production -->
 
 ## Voluntary disruption is the kind you can plan for
 
@@ -971,8 +933,6 @@ Segment 19 - Production
 - `drain` cordons the node and evicts politely, honoring the PDB
 
 ---
-
-<!-- _class: invert stage-production -->
 
 ## A floor of replicas, then a budget
 
@@ -991,36 +951,30 @@ sample-app   2               1                     10s
 
 ---
 
-<!-- _class: invert lead stage-production -->
-
 ## Drain the node - the app keeps answering
 
 ```bash
-$ kubectl drain kind-worker \
+$ kubectl get pod postgres-1 -n app -o wide
+NAME         READY   STATUS    NODE
+postgres-1   1/1     Running   kind-worker
+
+$ kubectl drain kind-worker2 \
     --ignore-daemonsets --delete-emptydir-data
-node/kind-worker cordoned
+node/kind-worker2 cordoned
 pod/sample-app-7d9c4b5f8-2xq4r evicted
-node/kind-worker drained
+node/kind-worker2 drained
 
 $ curl -H "Host: sample-app.local" localhost/healthz
-ok
+{"status":"ok"}
 ```
 
-The node went out for maintenance - a user would never have known.
-
-<!-- ===== SEGMENT 20 · Production · RBAC & Least Privilege ===== -->
+CNPG's single-instance `postgres-primary` PDB allows 0 disruptions - drain the **other** worker. No outage; at worst a sub-second blip if the `nginx-gateway` controller Pod rode the drained node, recovering instantly.
 
 ---
-
-<!-- _class: invert lead stage-production divider -->
 
 # RBAC & Least Privilege
 
-Segment 20 - Production
-
 ---
-
-<!-- _class: invert stage-production -->
 
 ## Give the workload its job - and nothing more
 
@@ -1030,8 +984,6 @@ Segment 20 - Production
 - It never calls the API, so don't even mount a token
 
 ---
-
-<!-- _class: invert stage-production -->
 
 ## A dedicated identity, scoped tight
 
@@ -1051,8 +1003,6 @@ ServiceAccount, Role, RoleBinding, then assign it to the Deployment.
 
 ---
 
-<!-- _class: invert stage-production -->
-
 ## Prove the blast radius
 
 ```bash
@@ -1067,19 +1017,11 @@ no
 
 Compromise this Pod and the cluster blast radius is exactly that Role.
 
-<!-- ===== SEGMENT 21 · Production · GitOps with Argo CD ===== -->
-
 ---
-
-<!-- _class: invert lead stage-production divider -->
 
 # GitOps with Argo CD
 
-Segment 21 - Production
-
 ---
-
-<!-- _class: invert stage-production -->
 
 ## The cruise-control loop, with git as the dial
 
@@ -1090,29 +1032,29 @@ Segment 21 - Production
 
 ---
 
-<!-- _class: invert stage-production -->
-
 ## Install Argo CD, point an Application at the base
 
 ```bash
 $ kubectl create namespace argocd
-$ kubectl apply -n argocd -f .../argo-cd/.../install.yaml
+$ kubectl apply --server-side -n argocd \
+    -f .../argo-cd/v3.4.3/manifests/install.yaml
 
 $ kubectl apply -n argocd -f - <<'EOF'
 kind: Application
 spec:
-  source: { repoURL: <repo>, path: k8s/base }
+  source:
+    repoURL: <repo>
+    targetRevision: main
+    path: manifests/day-one/k8s/base
   destination:
     server: https://kubernetes.default.svc
   syncPolicy: { automated: { selfHeal: true } }
 EOF
 ```
 
-`destination.server` is the in-cluster API - no external registration.
+`--server-side`: the `applicationsets` CRD exceeds kubectl's 256KB client-side limit. `destination.server` is the in-cluster API - no external registration.
 
 ---
-
-<!-- _class: invert stage-production -->
 
 ## Drift: the loop catches a hand-edit
 
@@ -1127,33 +1069,13 @@ NAME         READY   UP-TO-DATE   AVAILABLE
 sample-app   2/2     2            2
 ```
 
-`selfHeal` reverts the manual change - git won, no one applied it.
-
-<!-- ===== SEGMENT 22 · Interlude · Lunch ===== -->
+`selfHeal` reverts the manual change - git won, no one applied it. The `OutOfSync` window is sub-second here, so catch it fast or pre-stage a screenshot.
 
 ---
-
-<!-- _class: invert lead stage-interlude divider -->
-
-# Lunch
-
-Segment 22 - Interlude
-
-Back at 12:45 - the afternoon takes the same app to the cloud.
-
-<!-- ===== SEGMENT 23 · Production · GitOps Secrets with Sealed Secrets ===== -->
-
----
-
-<!-- _class: invert lead stage-production divider -->
 
 # GitOps Secrets with Sealed Secrets
 
-Segment 23 - Production
-
 ---
-
-<!-- _class: invert stage-production -->
 
 ## First two minutes: start EKS in the background
 
@@ -1163,8 +1085,6 @@ Segment 23 - Production
 - Sealed Secrets is the operator pattern again, doing one thing: decrypt
 
 ---
-
-<!-- _class: invert stage-production -->
 
 ## Kick it off, then switch back to kind
 
@@ -1184,8 +1104,6 @@ Leave EKS building; do not wait on it - teach while it provisions.
 
 ---
 
-<!-- _class: invert stage-production -->
-
 ## Seal the Secret - plaintext stays local
 
 ```bash
@@ -1204,8 +1122,6 @@ $ rm db-extra-secret.yaml   # never commit the plaintext
 
 ---
 
-<!-- _class: invert lead stage-production -->
-
 ## The ciphertext is git-safe
 
 ```bash
@@ -1223,30 +1139,20 @@ secret/db-extra      Opaque   1      14s
 
 Commit the `SealedSecret`; the controller decrypts it in-cluster.
 
-<!-- ===== SEGMENT 24 · Production · Going to the Cloud: Your EKS Cluster ===== -->
-
 ---
-
-<!-- _class: invert lead stage-production divider -->
 
 # Going to the Cloud: Your EKS Cluster
 
-Segment 24 - Production
-
 ---
 
-<!-- _class: invert stage-production -->
-
-## The cluster from segment 23 is up - no wait
+## The cluster from is up - no wait
 
 - EKS runs the control plane: API server, etcd, scheduler - all managed
 - You own the worker nodes and the workloads; never SSH the control plane
 - One cluster at a time - we *migrate* to EKS, we don't federate
-- It bills by the hour - which is exactly why segment 30 tears it down
+- It bills by the hour - which is exactly why we tear it down
 
 ---
-
-<!-- _class: invert stage-production -->
 
 ## Switch context, confirm the nodes are real EC2
 
@@ -1264,8 +1170,6 @@ The context switch is what moves every command to the cloud.
 
 ---
 
-<!-- _class: invert stage-production -->
-
 ## Up, but bare - name the gaps
 
 ```bash
@@ -1278,19 +1182,11 @@ gp2    kubernetes.io/aws-ebs   Delete          WaitForFirstConsumer
 - No Gateway controller - networking after that (26)
 - No Sealed Secrets controller yet - its own key comes in 28
 
-<!-- ===== SEGMENT 25 · Production · Cluster Storage & the EBS CSI Driver ===== -->
-
 ---
-
-<!-- _class: invert lead stage-production divider -->
 
 # Cluster Storage & the EBS CSI Driver
 
-Segment 25 - Production
-
 ---
-
-<!-- _class: invert stage-production -->
 
 ## The PVC is the contract; the provisioner is environmental
 
@@ -1301,13 +1197,11 @@ Segment 25 - Production
 
 ---
 
-<!-- _class: invert stage-production -->
-
 ## Driver as a managed add-on, then a gp3 class
 
 ```bash
 $ eksctl create addon --name aws-ebs-csi-driver \
-    --cluster fem-workshop --region <region> --force
+    --cluster fem-workshop --region us-west-2 --force
 ... addon "aws-ebs-csi-driver" active
 
 $ kubectl apply -f - <<'EOF'
@@ -1324,8 +1218,6 @@ storageclass.storage.k8s.io/gp3 created
 
 ---
 
-<!-- _class: invert lead stage-production -->
-
 ## The unchanged CNPG manifest binds to real EBS
 
 ```bash
@@ -1333,7 +1225,7 @@ $ kubectl get pvc -n app
 NAME         STATUS   VOLUME      CAPACITY   STORAGECLASS
 postgres-1   Bound    pvc-a1b2c3  10Gi       gp3
 
-$ aws ec2 describe-volumes --region <region> \
+$ aws ec2 describe-volumes --region us-west-2 \
     --filters Name=tag:...pvc/name,Values=postgres-1 \
     --query 'Volumes[].{ID:VolumeId,Type:VolumeType}'
 [ { "ID": "vol-0abc123def456", "Type": "gp3" } ]
@@ -1341,19 +1233,11 @@ $ aws ec2 describe-volumes --region <region> \
 
 Same Postgres manifest - manifest portable, storage class environmental.
 
-<!-- ===== SEGMENT 26 · Production · Cloud Networking & the AWS Load Balancer Controller ===== -->
-
 ---
-
-<!-- _class: invert lead stage-production divider -->
 
 # Cloud Networking & the AWS Load Balancer Controller
 
-Segment 26 - Production
-
 ---
-
-<!-- _class: invert stage-production -->
 
 ## The callback: route is a contract, controller is environmental
 
@@ -1363,8 +1247,6 @@ Segment 26 - Production
 - A `GatewayClass` names which controller picks up the `Gateway`
 
 ---
-
-<!-- _class: invert stage-production -->
 
 ## Install: IAM, then cert-manager + CRDs + controller
 
@@ -1383,8 +1265,6 @@ deployment.apps/aws-load-balancer-controller created
 `v3_X_Y_full.yaml` is a placeholder - apply your pinned version.
 
 ---
-
-<!-- _class: invert stage-production -->
 
 ## ALB config is type-safe CRDs, not annotations
 
@@ -1405,8 +1285,6 @@ The old `Ingress` smeared `alb.ingress.*` annotations - now real objects.
 
 ---
 
-<!-- _class: invert lead stage-production -->
-
 ## Same Gateway + HTTPRoute → a real ALB
 
 ```bash
@@ -1426,21 +1304,13 @@ ok
 
 Only `gatewayClassName` changed - contract unchanged, controller environmental.
 
-<!-- ===== SEGMENT 27 · Production · Environment Overlays with Kustomize ===== -->
-
 ---
-
-<!-- _class: invert lead stage-production divider -->
 
 # Environment Overlays with Kustomize
 
-Segment 27 - Production
-
 ---
 
-<!-- _class: invert stage-production -->
-
-## Two overlays over the untouched segment-14 base
+## Two overlays over the untouched base
 
 - The base stays exactly as it is - overlays patch, never rewrite
 - An overlay = a few patches + a reference to the base
@@ -1449,14 +1319,12 @@ Segment 27 - Production
 
 ---
 
-<!-- _class: invert stage-production -->
-
 ## The eks overlay names the base and its patches
 
 ```bash
-$ cat > overlays/eks/kustomization.yaml <<'EOF'
+$ cat > manifests/day-two/k8s/overlays/eks/kustomization.yaml <<'EOF'
 resources:
-  - ../../base
+  - ../../../../day-one/k8s/base
 patches:
   - path: gateway-class-alb.yaml
     target: { kind: Gateway, name: sample-app }
@@ -1467,17 +1335,15 @@ patches:
 EOF
 ```
 
-`overlays/kind/` does the same with the `nginx` class and replicas-2.
+`manifests/day-two/k8s/overlays/kind/` does the same with the `nginx` class and replicas-2.
 
 ---
-
-<!-- _class: invert lead stage-production -->
 
 ## Diff proves the base is untouched
 
 ```bash
-$ diff <(kubectl kustomize k8s/base) \
-       <(kubectl kustomize overlays/eks) | head
+$ diff <(kubectl kustomize manifests/day-one/k8s/base) \
+       <(kubectl kustomize manifests/day-two/k8s/overlays/eks) | head
 <     gatewayClassName: nginx
 >     gatewayClassName: alb
 <   replicas: 2
@@ -1487,30 +1353,20 @@ $ diff <(kubectl kustomize k8s/base) \
 
 A handful of lines - that's the entire `kind`-to-cloud delta.
 
-<!-- ===== SEGMENT 28 · Production · GitOps on EKS ===== -->
-
 ---
-
-<!-- _class: invert lead stage-production divider -->
 
 # GitOps on EKS
 
-Segment 28 - Production
-
 ---
-
-<!-- _class: invert stage-production -->
 
 ## Argo CD lives in the cluster it manages - so EKS gets its own
 
-- Same install as segment 21, on EKS, reconciling the `eks` overlay
+- Same install as, on EKS, reconciling the `eks` overlay
 - No external-cluster registration, no fan-out - one Argo CD per cluster
 - The `kind`-sealed Secret can't decrypt here: keys are per-cluster
 - So EKS installs its own controller and seals its own copy
 
 ---
-
-<!-- _class: invert stage-production -->
 
 ## Seal the EKS copy - stdin, no plaintext on disk
 
@@ -1524,14 +1380,12 @@ $ kubectl create secret generic db-extra -n app \
     --from-literal=password=demo-not-a-real-password \
     --dry-run=client -o yaml \
   | kubeseal --controller-namespace kube-system --format yaml \
-  > overlays/eks/sealed-db-extra.yaml
+  > manifests/day-two/k8s/overlays/eks/sealed-db-extra.yaml
 ```
 
 Piping into `kubeseal` beats write-then-`rm` - nothing to forget on disk.
 
 ---
-
-<!-- _class: invert lead stage-production -->
 
 ## Application points at the eks overlay, syncs from git
 
@@ -1539,7 +1393,7 @@ Piping into `kubeseal` beats write-then-`rm` - nothing to forget on disk.
 $ kubectl apply -n argocd -f - <<'EOF'
 kind: Application
 spec:
-  source: { repoURL: <repo>, path: overlays/eks }
+  source: { repoURL: <repo>, targetRevision: main, path: manifests/day-two/k8s/overlays/eks }
   destination:
     server: https://kubernetes.default.svc
   syncPolicy: { automated: { selfHeal: true } }
@@ -1550,21 +1404,13 @@ NAME         SYNC STATUS   HEALTH STATUS
 sample-app   Synced        Healthy
 ```
 
-`path: overlays/eks` - point at `base` and EKS gets the `kind` values.
-
-<!-- ===== SEGMENT 29 · Production · Built-in & Platform Observability ===== -->
+`path: manifests/day-two/k8s/overlays/eks` - point at `base` and EKS gets the `kind` values.
 
 ---
-
-<!-- _class: invert lead stage-production divider -->
 
 # Built-in & Platform Observability
 
-Segment 29 - Production
-
 ---
-
-<!-- _class: invert stage-production -->
 
 ## Get a long way before a metrics stack earns its weight
 
@@ -1574,8 +1420,6 @@ Segment 29 - Production
 - EKS CloudWatch Container Insights - the platform's own metrics sink
 
 ---
-
-<!-- _class: invert stage-production -->
 
 ## The built-in signals, no install
 
@@ -1593,32 +1437,22 @@ LAST SEEN   TYPE     REASON          OBJECT         MESSAGE
 
 ---
 
-<!-- _class: invert stage-production -->
-
 ## The platform option, then stop
 
 ```bash
 $ aws eks create-addon --cluster-name fem-workshop \
-    --region <region> \
+    --region us-west-2 \
     --addon-name amazon-cloudwatch-observability
 { "addon": { "status": "CREATING" } }
 ```
 
 We stop here on purpose: a Prometheus/Grafana/Loki stack is its own thing to run, scale, secure, and pay for - reach for it when built-in and platform signals stop being enough, not by default.
 
-<!-- ===== SEGMENT 30 · Production · Tearing It Down ===== -->
-
 ---
-
-<!-- _class: invert lead stage-production divider -->
 
 # Tearing It Down
 
-Segment 30 - Production
-
 ---
-
-<!-- _class: invert stage-production -->
 
 ## Cleanup is operational discipline, not tidying
 
@@ -1629,19 +1463,17 @@ Segment 30 - Production
 
 ---
 
-<!-- _class: invert stage-production -->
-
 ## Delete, then check for orphans
 
 ```bash
-$ eksctl delete cluster -f eks-cluster.yaml --region <region>
+$ eksctl delete cluster -f eks-cluster.yaml --region us-west-2
 ... deleting EKS cluster "fem-workshop"
 
-$ aws elbv2 describe-load-balancers --region <region> \
+$ aws elbv2 describe-load-balancers --region us-west-2 \
     --query 'LoadBalancers[?contains(...,`k8s-sampleapp`)]'
 []
 
-$ aws ec2 describe-volumes --region <region> \
+$ aws ec2 describe-volumes --region us-west-2 \
     --filters Name=...cluster/fem-workshop,Values=owned \
               Name=status,Values=available
 []
@@ -1651,32 +1483,22 @@ Two empty lists - the clean case, and the one to make students see.
 
 ---
 
-<!-- _class: invert lead stage-production -->
-
 ## A cluster you forget about is a bill you didn't budget for
 
 The single most common cloud-workshop regret is the cluster that ran for a week after everyone went home. The verification is how you guarantee it doesn't happen to anyone in the room.
 
 ```bash
-$ eksctl get cluster --region <region>
-No clusters found in <region>.
+$ eksctl get cluster --region us-west-2
+No clusters found in us-west-2.
 ```
 
 Down, verified clean, nothing billing - no one leaves Day 2 with a live cluster.
 
-<!-- ===== SEGMENT 31 · Production · Day 2 Recap: End of Production ===== -->
-
 ---
 
-<!-- _class: invert lead stage-production divider -->
-
-# Day 2 Recap: End of Production
-
-Segment 31 - Production
+# End of Production
 
 ---
-
-<!-- _class: invert stage-production -->
 
 ## What Production added - hardened, then cloud
 
@@ -1687,8 +1509,6 @@ Segment 31 - Production
 
 ---
 
-<!-- _class: invert stage-production -->
-
 ## ...and made it cloud-native and git-driven
 
 - **GitOps:** Argo CD reconciles git and self-heals drift - no hand-applies
@@ -1698,8 +1518,6 @@ Segment 31 - Production
 
 ---
 
-<!-- _class: invert stage-production -->
-
 ## The theme paid off end to end
 
 - The same PVC bound to local-path on `kind`, to EBS on EKS
@@ -1707,19 +1525,11 @@ Segment 31 - Production
 - The same Kustomize base ran on both via environment overlays
 - Route was the contract; the controller behind it was environmental
 
-<!-- ===== SEGMENT 32 · Interlude · Wrap-Up ===== -->
-
 ---
-
-<!-- _class: invert lead stage-interlude divider -->
 
 # Wrap-Up
 
-Segment 32 - Interlude
-
 ---
-
-<!-- _class: invert stage-interlude -->
 
 ## The whole climb, drawn once more
 
@@ -1729,8 +1539,6 @@ One app rode from a bare Pod to autoscaled GitOps on a real cloud cluster.
 
 ---
 
-<!-- _class: invert stage-interlude -->
-
 ## The diff between stages is the workshop
 
 - **Kubernetes docs** - the API reference for everything you touched
@@ -1739,8 +1547,6 @@ One app rode from a bare Pod to autoscaled GitOps on a real cloud cluster.
 - **Stage branches** `poc` / `stable` / `production` - each stage's exact end-state
 
 ---
-
-<!-- _class: invert lead stage-interlude -->
 
 ## ...go run your own clusters on Monday
 
